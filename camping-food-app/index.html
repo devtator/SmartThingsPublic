@@ -157,6 +157,37 @@
   }
   .status.pending { background: var(--pend-bg); color: var(--pend); }
   .status.confirmed { background: var(--ok-bg); color: var(--ok); }
+  .status.served { background: #ece7f4; color: #6a4fa3; }
+  .meal-photo {
+    width: 100%;
+    height: 150px;
+    object-fit: cover;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+  }
+  .stars { color: var(--sun); letter-spacing: 2px; font-size: 0.95rem; }
+  .star-picker { display: flex; gap: 2px; }
+  .star-picker button {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.7rem;
+    line-height: 1;
+    color: #ddd3c2;
+    padding: 2px;
+    transition: transform 0.1s;
+  }
+  .star-picker button.lit { color: var(--sun); }
+  .star-picker button:hover { transform: scale(1.15); }
+  .review-line {
+    padding: 10px 0;
+    border-top: 1px dashed var(--line);
+    font-size: 0.88rem;
+  }
+  .review-line:first-of-type { border-top: none; }
+  .review-line .quote { color: var(--ink-soft); font-style: italic; margin-top: 3px; }
+  .photo-preview-wrap { display: flex; align-items: flex-start; gap: 10px; }
+  .photo-preview-wrap .meal-photo { height: 90px; width: 140px; }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
   .field label { font-size: 0.8rem; font-weight: 700; color: var(--ink-soft); }
@@ -290,6 +321,7 @@
 
 <dialog id="orderDialog"></dialog>
 <dialog id="mealDialog"></dialog>
+<dialog id="rateDialog"></dialog>
 <div class="toast" id="toast"></div>
 
 <script>
@@ -307,10 +339,15 @@
  *    preferred pickup time, and gets notified when the chef locks
  *    in the actual time.
  *
+ * After the meal, the chef marks it served — every camper who
+ * picked it up gets a notification asking them to rate the meal
+ * and send the chef a compliment, which lands on the chef's
+ * kudos board.
+ *
  * State persists in localStorage so the demo survives reloads.
  * ------------------------------------------------------------- */
 
-const STORE_KEY = "campfire-kitchen-v1";
+const STORE_KEY = "campfire-kitchen-v2";
 const ALL_SLOTS = ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM"];
 
 /* ---------- Sample data set: summertime camp breakfast ---------- */
@@ -320,63 +357,70 @@ function seedData() {
       id: "m1", emoji: "🥓", name: "Eggs & Bacon Breakfast Sandwich",
       category: "Sandwich",
       desc: "Two fried eggs, crispy campfire bacon, and melted cheddar on a griddle-toasted brioche bun.",
-      price: 8.0, available: true,
+      price: 8.0, available: true, photo: null,
       slots: ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM"],
     },
     {
       id: "m2", emoji: "🥐", name: "Sausage, Egg & Cheese Croissant",
       category: "Sandwich",
       desc: "Maple breakfast sausage, folded egg, and American cheese tucked into a warm, flaky croissant.",
-      price: 8.5, available: true,
+      price: 8.5, available: true, photo: null,
       slots: ["7:30 AM", "8:00 AM", "8:30 AM"],
     },
     {
       id: "m3", emoji: "🥯", name: "Smoked Ham & Egg Bagel",
       category: "Sandwich",
       desc: "Fire-toasted everything bagel with smoked ham, over-medium egg, Swiss, and a swipe of honey mustard.",
-      price: 8.0, available: true,
+      price: 8.0, available: true, photo: null,
       slots: ["8:00 AM", "8:30 AM", "9:00 AM"],
     },
     {
       id: "m4", emoji: "🍳", name: "Campfire Breakfast Bowl",
       category: "Bowl",
       desc: "Scrambled eggs over crispy skillet potatoes with bacon crumbles, cheddar, and fire-roasted salsa.",
-      price: 9.5, available: true,
+      price: 9.5, available: true, photo: null,
       slots: ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM"],
     },
     {
       id: "m5", emoji: "🥑", name: "Veggie Sunrise Bowl",
       category: "Bowl",
       desc: "Soft-scrambled eggs, black beans, charred peppers and onions, avocado, and cotija over hash browns.",
-      price: 9.0, available: true,
+      price: 9.0, available: true, photo: null,
       slots: ["7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM"],
     },
     {
       id: "m6", emoji: "🥞", name: "Pancake Stack & Bacon Plate",
       category: "Plate",
       desc: "Three buttermilk griddle cakes with maple syrup, whipped butter, and two strips of thick-cut bacon.",
-      price: 9.0, available: false,
+      price: 9.0, available: false, photo: null,
       slots: ["8:30 AM", "9:00 AM", "9:30 AM"],
     },
   ];
 
   const orders = [
-    { id: "o1", mealId: "m1", camper: "Riley",  qty: 2, preferred: "7:30 AM", notes: "Extra crispy bacon please!", status: "pending",   confirmedSlot: null },
-    { id: "o2", mealId: "m1", camper: "Sam",    qty: 1, preferred: "7:30 AM", notes: "",                            status: "pending",   confirmedSlot: null },
-    { id: "o3", mealId: "m1", camper: "Dana",   qty: 1, preferred: "8:00 AM", notes: "No cheese",                   status: "pending",   confirmedSlot: null },
-    { id: "o4", mealId: "m4", camper: "Alex",   qty: 1, preferred: "8:00 AM", notes: "Salsa on the side",           status: "pending",   confirmedSlot: null },
-    { id: "o5", mealId: "m4", camper: "Jordan", qty: 2, preferred: "8:30 AM", notes: "",                            status: "pending",   confirmedSlot: null },
-    { id: "o6", mealId: "m5", camper: "Morgan", qty: 1, preferred: "9:00 AM", notes: "Extra avocado",               status: "confirmed", confirmedSlot: "9:00 AM" },
+    { id: "o1", mealId: "m1", camper: "Riley",  qty: 2, preferred: "7:30 AM", notes: "Extra crispy bacon please!", status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o2", mealId: "m1", camper: "Sam",    qty: 1, preferred: "7:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o3", mealId: "m1", camper: "Dana",   qty: 1, preferred: "8:00 AM", notes: "No cheese",                   status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o4", mealId: "m4", camper: "Alex",   qty: 1, preferred: "8:00 AM", notes: "Salsa on the side",           status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o5", mealId: "m4", camper: "Jordan", qty: 2, preferred: "8:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o6", mealId: "m5", camper: "Morgan", qty: 1, preferred: "9:00 AM", notes: "Extra avocado",               status: "served",    confirmedSlot: "9:00 AM", review: null },
+    { id: "o7", mealId: "m6", camper: "Dana",   qty: 1, preferred: "8:30 AM", notes: "",                            status: "served",    confirmedSlot: "8:30 AM",
+      review: { rating: 5, comment: "Fluffiest pancakes I've ever had at a campsite — thank you, Chef!", when: "Yesterday 10:05 AM" } },
   ];
 
   const notifications = [
     {
       id: "n1", to: "Morgan", unread: true,
-      text: "👨‍🍳 Chef confirmed: Veggie Sunrise Bowl will be ready for pickup at 9:00 AM at the camp kitchen.",
-      when: "Yesterday 6:42 PM",
+      text: "🍽️ Hope you enjoyed the Veggie Sunrise Bowl! Tap “Rate & thank the chef” on your order to rate the meal and send a compliment.",
+      when: "Yesterday 9:40 AM",
     },
     {
       id: "n2", to: "chef", unread: true,
+      text: "💛 Dana rated Pancake Stack & Bacon Plate ★★★★★ — “Fluffiest pancakes I've ever had at a campsite — thank you, Chef!”",
+      when: "Yesterday 10:05 AM",
+    },
+    {
+      id: "n3", to: "chef", unread: true,
       text: "🎒 Riley ordered 2× Eggs & Bacon Breakfast Sandwich (prefers 7:30 AM).",
       when: "Yesterday 8:15 PM",
     },
@@ -394,7 +438,14 @@ function load() {
   } catch (e) { /* corrupted store — fall through to seed */ }
   return seedData();
 }
-function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function save() {
+  try {
+    localStorage.setItem(STORE_KEY, JSON.stringify(state));
+  } catch (e) {
+    // localStorage quota exceeded — most likely too many photos
+    toast("⚠️ Local storage is full — try removing a meal photo");
+  }
+}
 function uid(prefix) { return prefix + (state.nextId++); }
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " today";
@@ -408,6 +459,16 @@ function esc(s) {
 }
 function money(n) { return "$" + n.toFixed(2); }
 function mealById(id) { return state.meals.find((m) => m.id === id); }
+function starStr(n) { return "★".repeat(n) + "☆".repeat(5 - n); }
+function mealReviews(mealId) {
+  return state.orders.filter((o) => o.mealId === mealId && o.review);
+}
+function ratingChip(mealId) {
+  const revs = mealReviews(mealId);
+  if (!revs.length) return "";
+  const avg = revs.reduce((a, o) => a + o.review.rating, 0) / revs.length;
+  return `<span class="chip" title="Camper rating"><span class="stars">★</span> ${avg.toFixed(1)} · ${revs.length} review${revs.length > 1 ? "s" : ""}</span>`;
+}
 function toast(msg) {
   const t = $("#toast");
   t.textContent = msg;
@@ -454,6 +515,7 @@ function camperView() {
     <div class="cards">
       ${avail.map((m) => `
         <div class="card">
+          ${m.photo ? `<img class="meal-photo" src="${m.photo}" alt="${esc(m.name)}">` : ""}
           <div class="meal-head">
             <span class="meal-emoji">${m.emoji}</span>
             <div>
@@ -464,6 +526,7 @@ function camperView() {
           <div class="meal-desc">${esc(m.desc)}</div>
           <div class="meal-meta">
             <span class="price">${money(m.price)}</span>
+            ${ratingChip(m.id)}
             ${m.slots.map((s) => `<span class="chip slot">${s}</span>`).join("")}
           </div>
           <button class="btn primary" onclick="openOrderDialog('${m.id}')">Order</button>
@@ -474,15 +537,25 @@ function camperView() {
     <div class="section-title">🧾 My orders</div>
     ${myOrders.length ? `<div class="card">` + myOrders.map((o) => {
       const m = mealById(o.mealId);
+      let tail;
+      if (o.status === "pending") {
+        tail = `<span class="status pending">Awaiting chef</span>
+                <button class="btn ghost small" onclick="cancelOrder('${o.id}')">Cancel</button>`;
+      } else if (o.status === "confirmed") {
+        tail = `<span class="status confirmed">Pickup ${o.confirmedSlot}</span>`;
+      } else if (o.review) {
+        tail = `<span class="status served">Enjoyed</span>
+                <span class="stars" title="Your rating">${starStr(o.review.rating)}</span>`;
+      } else {
+        tail = `<span class="status served">Picked up</span>
+                <button class="btn primary small" onclick="openRateDialog('${o.id}')">⭐ Rate &amp; thank the chef</button>`;
+      }
       return `
         <div class="order-line">
           <span>${m.emoji}</span>
           <span class="who">${o.qty}× ${esc(m.name)}</span>
           <span class="pref">preferred ${o.preferred}</span>
-          ${o.status === "confirmed"
-            ? `<span class="status confirmed">Pickup ${o.confirmedSlot}</span>`
-            : `<span class="status pending">Awaiting chef</span>
-               <button class="btn ghost small" onclick="cancelOrder('${o.id}')">Cancel</button>`}
+          ${tail}
         </div>`;
     }).join("") + `</div>`
     : `<div class="empty">No orders yet — grab something off the menu above!</div>`}
@@ -502,7 +575,10 @@ function chefView() {
   const pendingByMeal = state.meals
     .map((m) => ({ meal: m, orders: state.orders.filter((o) => o.mealId === m.id && o.status === "pending") }))
     .filter((g) => g.orders.length > 0);
-  const confirmed = state.orders.filter((o) => o.status === "confirmed");
+  const confirmedByMeal = state.meals
+    .map((m) => ({ meal: m, orders: state.orders.filter((o) => o.mealId === m.id && o.status === "confirmed") }))
+    .filter((g) => g.orders.length > 0);
+  const reviews = state.orders.filter((o) => o.review);
 
   return `
     <div class="section-title">📋 Review orders &amp; set pickup times</div>
@@ -510,16 +586,39 @@ function chefView() {
     ${pendingByMeal.length ? pendingByMeal.map(chefOrderGroup).join("")
       : `<div class="empty">No pending orders right now. Time for a coffee by the fire ☕</div>`}
 
-    ${confirmed.length ? `
+    ${confirmedByMeal.length ? `
       <div class="section-title">✅ Confirmed pickups</div>
+      <p class="hint">Once a meal is handed out, mark it served — every camper who picked it up gets a nudge to rate the meal and send you a compliment.</p>
+      ${confirmedByMeal.map(({ meal, orders }) => `
+        <div class="card" style="margin-bottom:16px">
+          <div class="meal-head">
+            <span class="meal-emoji">${meal.emoji}</span>
+            <div>
+              <div class="meal-name">${esc(meal.name)}</div>
+              <div class="meal-cat">Pickup at ${orders[0].confirmedSlot}</div>
+            </div>
+          </div>
+          ${orders.map((o) => `
+            <div class="order-line">
+              <span class="who">${esc(o.camper)}</span>
+              <span>${o.qty}×</span>
+              <span class="status confirmed">Pickup ${o.confirmedSlot}</span>
+            </div>`).join("")}
+          <div class="row">
+            <button class="btn green" onclick="markServed('${meal.id}')">🍽️ Mark served &amp; request reviews</button>
+          </div>
+        </div>`).join("")}` : ""}
+
+    ${reviews.length ? `
+      <div class="section-title">💛 Compliments &amp; ratings</div>
       <div class="card">
-        ${confirmed.map((o) => {
+        ${reviews.map((o) => {
           const m = mealById(o.mealId);
-          return `<div class="order-line">
-            <span>${m.emoji}</span>
-            <span class="who">${esc(o.camper)}</span>
-            <span>${o.qty}× ${esc(m.name)}</span>
-            <span class="status confirmed">Pickup ${o.confirmedSlot}</span>
+          return `<div class="review-line">
+            <span class="stars">${starStr(o.review.rating)}</span>
+            <strong>${esc(o.camper)}</strong> · ${m.emoji} ${esc(m.name)}
+            ${o.review.comment ? `<div class="quote">“${esc(o.review.comment)}”</div>` : ""}
+            <span class="when" style="font-size:0.72rem;color:var(--ink-soft)">${esc(o.review.when)}</span>
           </div>`;
         }).join("")}
       </div>` : ""}
@@ -529,6 +628,7 @@ function chefView() {
     <div class="cards">
       ${state.meals.map((m) => `
         <div class="card ${m.available ? "" : "unavailable"}">
+          ${m.photo ? `<img class="meal-photo" src="${m.photo}" alt="${esc(m.name)}">` : ""}
           <div class="meal-head">
             <span class="meal-emoji">${m.emoji}</span>
             <div>
@@ -536,7 +636,7 @@ function chefView() {
               <div class="meal-cat">${esc(m.category)} · ${money(m.price)}</div>
             </div>
           </div>
-          <div class="meal-meta">${m.slots.map((s) => `<span class="chip slot">${s}</span>`).join("")}</div>
+          <div class="meal-meta">${ratingChip(m.id)}${m.slots.map((s) => `<span class="chip slot">${s}</span>`).join("")}</div>
           <div class="row">
             <label class="toggle-avail">
               <input type="checkbox" ${m.available ? "checked" : ""} onchange="toggleAvail('${m.id}')">
@@ -651,6 +751,67 @@ function confirmMealTime(mealId) {
   toast(`📣 ${affected.length} camper${affected.length !== 1 ? "s" : ""} notified — ${meal.name} at ${slot}`);
 }
 
+function markServed(mealId) {
+  const meal = mealById(mealId);
+  const affected = state.orders.filter((o) => o.mealId === mealId && o.status === "confirmed");
+  for (const o of affected) {
+    o.status = "served";
+    notify(o.camper, `🍽️ Hope you enjoyed the ${meal.name}! Tap “Rate & thank the chef” on your order to rate the meal and send a compliment.`);
+  }
+  render();
+  toast(`🍽️ ${meal.name} served — ${affected.length} camper${affected.length !== 1 ? "s" : ""} asked to rate & thank the chef`);
+}
+
+/* ----------------------- rate dialog --------------------------- */
+let rateStars = 0;
+
+function openRateDialog(orderId) {
+  const o = state.orders.find((x) => x.id === orderId);
+  if (!o) return;
+  const m = mealById(o.mealId);
+  rateStars = 0;
+  const dlg = $("#rateDialog");
+  dlg.innerHTML = `
+    <h3>${m.emoji} How was the ${esc(m.name)}?</h3>
+    <div class="sub">Rate the meal and send the chef a compliment — it makes their morning.</div>
+    <div class="field">
+      <label>Your rating</label>
+      <div class="star-picker" id="ratePicker">
+        ${[1, 2, 3, 4, 5].map((n) => `<button type="button" data-n="${n}" aria-label="${n} star${n > 1 ? "s" : ""}">★</button>`).join("")}
+      </div>
+    </div>
+    <div class="field">
+      <label>Compliments for the chef (optional)</label>
+      <textarea id="rateComment" rows="3" placeholder="e.g. Best breakfast sandwich of the whole trip!"></textarea>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('rateDialog').close()">Later</button>
+      <button class="btn primary" id="rateSubmit" disabled onclick="submitReview('${o.id}')">Send to chef</button>
+    </div>
+  `;
+  dlg.querySelectorAll("#ratePicker button").forEach((b) => {
+    b.onclick = () => {
+      rateStars = parseInt(b.dataset.n, 10);
+      dlg.querySelectorAll("#ratePicker button").forEach((x) =>
+        x.classList.toggle("lit", parseInt(x.dataset.n, 10) <= rateStars));
+      $("#rateSubmit").disabled = false;
+    };
+  });
+  dlg.showModal();
+}
+
+function submitReview(orderId) {
+  const o = state.orders.find((x) => x.id === orderId);
+  if (!o || !rateStars) return;
+  const comment = $("#rateComment").value.trim();
+  const m = mealById(o.mealId);
+  o.review = { rating: rateStars, comment, when: nowLabel() };
+  notify("chef", `💛 ${o.camper} rated ${m.name} ${"★".repeat(rateStars)}${comment ? ` — “${comment}”` : ""}`);
+  $("#rateDialog").close();
+  render();
+  toast("Thanks! Your rating and compliments were sent to the chef 💛");
+}
+
 function markNotifsRead() {
   const me = state.role === "chef" ? "chef" : state.camperName;
   for (const n of state.notifications) {
@@ -716,7 +877,7 @@ function placeOrder(mealId) {
   const meal = mealById(mealId);
   state.orders.push({
     id: uid("o"), mealId, camper: name, qty,
-    preferred: dialogSlot, notes, status: "pending", confirmedSlot: null,
+    preferred: dialogSlot, notes, status: "pending", confirmedSlot: null, review: null,
   });
   notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${dialogSlot}).${notes ? " Note: " + notes : ""}`);
   $("#orderDialog").close();
@@ -725,9 +886,53 @@ function placeOrder(mealId) {
 }
 
 /* --------------------- meal editor dialog ---------------------- */
+let pendingPhoto = null;
+
+function renderPhotoPreview() {
+  const wrap = $("#mPhotoPreview");
+  if (!wrap) return;
+  wrap.innerHTML = pendingPhoto
+    ? `<div class="photo-preview-wrap">
+         <img class="meal-photo" src="${pendingPhoto}" alt="Meal photo preview">
+         <button type="button" class="btn ghost small" onclick="removePhoto()">✕ Remove photo</button>
+       </div>`
+    : "";
+}
+
+function removePhoto() {
+  pendingPhoto = null;
+  $("#mPhoto").value = "";
+  renderPhotoPreview();
+}
+
+// Downscale the chosen image (max 640px wide, JPEG) so it stores
+// comfortably in localStorage.
+function handlePhotoInput(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const img = new Image();
+    img.onload = () => {
+      const MAX_W = 640;
+      const scale = Math.min(1, MAX_W / img.width);
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(img.width * scale);
+      canvas.height = Math.round(img.height * scale);
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      pendingPhoto = canvas.toDataURL("image/jpeg", 0.78);
+      renderPhotoPreview();
+    };
+    img.onerror = () => toast("That file doesn't look like an image");
+    img.src = reader.result;
+  };
+  reader.readAsDataURL(file);
+}
+
 function openMealDialog(mealId) {
   const m = mealId ? mealById(mealId) : null;
   const slots = m ? [...m.slots] : ["7:30 AM", "8:00 AM"];
+  pendingPhoto = m ? m.photo : null;
   const dlg = $("#mealDialog");
   dlg.innerHTML = `
     <h3>${m ? "Edit meal" : "Add a meal"}</h3>
@@ -743,6 +948,11 @@ function openMealDialog(mealId) {
     <div class="field"><label>Description</label><textarea id="mDesc" rows="2">${m ? esc(m.desc) : ""}</textarea></div>
     <div class="field"><label>Price ($)</label><input type="number" id="mPrice" min="0" step="0.5" value="${m ? m.price : 8}"></div>
     <div class="field">
+      <label>Photo of the dish (optional)</label>
+      <input type="file" id="mPhoto" accept="image/*">
+      <div id="mPhotoPreview"></div>
+    </div>
+    <div class="field">
       <label>Cook time slots</label>
       <div class="slot-picker" id="mSlots">
         ${ALL_SLOTS.map((s) => `<button type="button" data-slot="${s}" class="${slots.includes(s) ? "selected" : ""}">${s}</button>`).join("")}
@@ -756,6 +966,8 @@ function openMealDialog(mealId) {
   dlg.querySelectorAll("#mSlots button").forEach((b) => {
     b.onclick = () => b.classList.toggle("selected");
   });
+  $("#mPhoto").addEventListener("change", handlePhotoInput);
+  renderPhotoPreview();
   dlg.showModal();
 }
 
@@ -771,6 +983,7 @@ function saveMeal(mealId) {
     desc: $("#mDesc").value.trim(),
     price: Math.max(0, parseFloat($("#mPrice").value) || 0),
     slots,
+    photo: pendingPhoto,
   };
   if (mealId) {
     Object.assign(mealById(mealId), data);

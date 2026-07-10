@@ -58,11 +58,18 @@
     }
   ],
   "orders": [
-    { "id": "o1", "mealId": "m1", "camper": "Riley",  "qty": 2, "preferredSlot": "7:30 AM", "notes": "Extra crispy bacon please!", "status": "pending",   "confirmedSlot": null },
-    { "id": "o2", "mealId": "m1", "camper": "Sam",    "qty": 1, "preferredSlot": "7:30 AM", "notes": "",                           "status": "pending",   "confirmedSlot": null },
-    { "id": "o3", "mealId": "m1", "camper": "Dana",   "qty": 1, "preferredSlot": "8:00 AM", "notes": "No cheese",                  "status": "pending",   "confirmedSlot": null },
-    { "id": "o4", "mealId": "m4", "camper": "Alex",   "qty": 1, "preferredSlot": "8:00 AM", "notes": "Salsa on the side",          "status": "pending",   "confirmedSlot": null },
-    { "id": "o5", "mealId": "m4", "camper": "Jordan", "qty": 2, "preferredSlot": "8:30 AM", "notes": "",                           "status": "pending",   "confirmedSlot": null },
-    { "id": "o6", "mealId": "m5", "camper": "Morgan", "qty": 1, "preferredSlot": "9:00 AM", "notes": "Extra avocado",              "status": "confirmed", "confirmedSlot": "9:00 AM" }
-  ]
+    { "id": "o1", "mealId": "m1", "camper": "Riley",  "qty": 2, "preferredSlot": "7:30 AM", "notes": "Extra crispy bacon please!", "status": "pending",   "confirmedSlot": null,      "review": null },
+    { "id": "o2", "mealId": "m1", "camper": "Sam",    "qty": 1, "preferredSlot": "7:30 AM", "notes": "",                           "status": "pending",   "confirmedSlot": null,      "review": null },
+    { "id": "o3", "mealId": "m1", "camper": "Dana",   "qty": 1, "preferredSlot": "8:00 AM", "notes": "No cheese",                  "status": "pending",   "confirmedSlot": null,      "review": null },
+    { "id": "o4", "mealId": "m4", "camper": "Alex",   "qty": 1, "preferredSlot": "8:00 AM", "notes": "Salsa on the side",          "status": "pending",   "confirmedSlot": null,      "review": null },
+    { "id": "o5", "mealId": "m4", "camper": "Jordan", "qty": 2, "preferredSlot": "8:30 AM", "notes": "",                           "status": "pending",   "confirmedSlot": null,      "review": null },
+    { "id": "o6", "mealId": "m5", "camper": "Morgan", "qty": 1, "preferredSlot": "9:00 AM", "notes": "Extra avocado",              "status": "served",    "confirmedSlot": "9:00 AM", "review": null },
+    { "id": "o7", "mealId": "m6", "camper": "Dana",   "qty": 1, "preferredSlot": "8:30 AM", "notes": "",                           "status": "served",    "confirmedSlot": "8:30 AM",
+      "review": { "rating": 5, "comment": "Fluffiest pancakes I've ever had at a campsite — thank you, Chef!", "when": "Yesterday 10:05 AM" } }
+  ],
+  "notes": {
+    "orderStatuses": ["pending", "confirmed", "served"],
+    "mealPhoto": "Each meal may also carry a `photo` field (data-URL JPEG, downscaled to max 640px wide) uploaded by the chef; omitted here to keep the JSON readable.",
+    "review": "Set on an order after the camper rates a served meal: { rating: 1-5, comment: string, when: string }. Submitting a review notifies the chef."
+  }
 }

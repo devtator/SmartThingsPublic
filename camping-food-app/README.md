@@ -18,6 +18,9 @@ The app has two roles, switchable with the toggle in the header:
 ### 👨‍🍳 Chef
 - **Sets the meals** — name, description, category, price, and whether it's
   on the menu today.
+- **Uploads a photo of the dish (optional)** — chosen in the meal editor;
+  images are downscaled in the browser (max 640px wide JPEG) and stored
+  locally, and show on the meal cards in both views.
 - **Sets cook times** — the time slots they're willing to cook each meal
   (7:00 AM–9:30 AM in half-hour slots).
 - **Reviews orders** — pending orders are grouped by meal, with a tally bar
@@ -25,14 +28,24 @@ The app has two roles, switchable with the toggle in the header:
 - **Confirms one pickup time per meal** — picking a time and hitting
   *"Confirm time & notify campers"* locks it in and sends a notification to
   every camper who ordered that meal.
+- **Marks meals served** — after handout, *"Mark served & request reviews"*
+  notifies every camper who picked it up to rate the meal and send
+  compliments.
+- **Collects kudos** — camper ratings and compliments land on the
+  💛 *Compliments & ratings* board, and each meal shows its average rating.
 
 ### 🎒 Camper
-- **Browses the menu** of available meals with prices and offered time slots.
+- **Browses the menu** of available meals with photos, prices, ratings, and
+  offered time slots.
 - **Places an order** — chooses a preferred pickup time from the chef's
   offered slots, a quantity, and optional notes (e.g. "no cheese").
 - **Gets notified** — the 🔔 bell shows when the chef confirms the actual
   pickup time. Orders show *Awaiting chef* until then, and the confirmed
   pickup time after.
+- **Rates & thanks the chef** — after the chef marks a meal served, the
+  camper gets a notification and a ⭐ *Rate & thank the chef* button on the
+  order: a 1–5 star rating plus optional compliments, delivered straight to
+  the chef's notifications and kudos board.
 
 Change the name in the "Ordering as" bar to act as a different camper.
 
@@ -51,8 +64,10 @@ The seed data is breakfast-focused (the predominant use case):
 
 It also seeds several pending camper orders (Riley, Sam, Dana, Alex, Jordan)
 with different preferred times, so the chef's review-and-confirm flow is
-demonstrable immediately, plus one already-confirmed order (Morgan) to show
-the notification flow.
+demonstrable immediately. To demo the feedback loop it includes one served
+order awaiting a rating (Morgan — switch the camper name to Morgan to try
+the ⭐ rate flow) and one completed 5-star review with a compliment (Dana's
+pancakes), already visible on the chef's kudos board.
 
 The same data set is available as machine-readable JSON in
 [`sample-data.json`](sample-data.json) for when this grows a real backend.
