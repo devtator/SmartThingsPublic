@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campfire Kitchen — Camp Food Ordering &amp; Pickup</title>
+<style>
+  :root {
+    --pine: #2f5d3a;
+    --pine-dark: #234730;
+    --cream: #fdf6ec;
+    --card: #ffffff;
+    --ember: #e2703a;
+    --ember-dark: #c85a28;
+    --sun: #f2b134;
+    --ink: #2c2a26;
+    --ink-soft: #6b675f;
+    --line: #e8dfd2;
+    --ok: #3a7d44;
+    --ok-bg: #e4f2e6;
+    --pend: #b07d2b;
+    --pend-bg: #fdf0d5;
+    --radius: 14px;
+    --shadow: 0 2px 10px rgba(44, 42, 38, 0.08);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Avenir Next", "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: var(--cream);
+    color: var(--ink);
+    min-height: 100vh;
+  }
+  header {
+    background: linear-gradient(135deg, var(--pine-dark), var(--pine));
+    color: #fff;
+    padding: 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  }
+  header .logo { font-size: 1.9rem; }
+  header h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: 0.3px; }
+  header .tagline { font-size: 0.78rem; opacity: 0.85; }
+  .spacer { flex: 1; }
+  .role-toggle {
+    display: flex;
+    background: rgba(255,255,255,0.15);
+    border-radius: 999px;
+    padding: 4px;
+    gap: 4px;
+  }
+  .role-toggle button {
+    border: none;
+    background: transparent;
+    color: #fff;
+    padding: 7px 16px;
+    border-radius: 999px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .role-toggle button.active { background: var(--sun); color: var(--ink); }
+  .bell {
+    position: relative;
+    background: rgba(255,255,255,0.15);
+    border: none;
+    color: #fff;
+    font-size: 1.15rem;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+  .bell .badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: var(--ember);
+    color: #fff;
+    font-size: 0.68rem;
+    font-weight: 700;
+    min-width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 4px;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 22px 18px 70px; }
+  .section-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+    margin: 26px 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-title:first-child { margin-top: 4px; }
+  .hint { font-size: 0.82rem; color: var(--ink-soft); margin: -6px 0 14px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .card.unavailable { opacity: 0.55; }
+  .meal-head { display: flex; align-items: flex-start; gap: 10px; }
+  .meal-emoji { font-size: 1.9rem; line-height: 1; }
+  .meal-name { font-weight: 700; font-size: 1rem; }
+  .meal-cat { font-size: 0.72rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.6px; }
+  .meal-desc { font-size: 0.86rem; color: var(--ink-soft); line-height: 1.45; }
+  .meal-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+  .price { font-weight: 700; color: var(--pine); }
+  .chip {
+    font-size: 0.74rem;
+    background: var(--cream);
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    padding: 3px 9px;
+    color: var(--ink-soft);
+  }
+  .chip.slot { background: #eef4ee; border-color: #cfe0d2; color: var(--pine-dark); }
+  .btn {
+    border: none;
+    border-radius: 10px;
+    padding: 10px 16px;
+    font-size: 0.9rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: filter 0.12s;
+  }
+  .btn:hover { filter: brightness(0.95); }
+  .btn.primary { background: var(--ember); color: #fff; }
+  .btn.green { background: var(--pine); color: #fff; }
+  .btn.ghost { background: transparent; border: 1.5px solid var(--line); color: var(--ink-soft); }
+  .btn.small { padding: 6px 12px; font-size: 0.8rem; }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .status {
+    font-size: 0.74rem;
+    font-weight: 700;
+    border-radius: 999px;
+    padding: 3px 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .status.pending { background: var(--pend-bg); color: var(--pend); }
+  .status.confirmed { background: var(--ok-bg); color: var(--ok); }
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+  .field label { font-size: 0.8rem; font-weight: 700; color: var(--ink-soft); }
+  input[type="text"], input[type="number"], select, textarea {
+    font: inherit;
+    padding: 9px 11px;
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    background: #fff;
+    width: 100%;
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--sun); border-color: var(--sun); }
+  .slot-picker { display: flex; flex-wrap: wrap; gap: 8px; }
+  .slot-picker button {
+    border: 1.5px solid var(--line);
+    background: #fff;
+    border-radius: 999px;
+    padding: 7px 14px;
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .slot-picker button.selected { background: var(--pine); border-color: var(--pine); color: #fff; }
+  .tally { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+  .tally-row { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; }
+  .tally-row .t-slot { width: 74px; font-weight: 600; }
+  .tally-row .t-bar { height: 10px; background: var(--sun); border-radius: 999px; min-width: 4px; }
+  .tally-row .t-count { color: var(--ink-soft); font-size: 0.78rem; }
+  .order-line {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 0;
+    border-top: 1px dashed var(--line);
+    font-size: 0.88rem;
+    flex-wrap: wrap;
+  }
+  .order-line:first-of-type { border-top: none; }
+  .order-line .who { font-weight: 700; }
+  .order-line .pref { color: var(--ink-soft); }
+  .notif {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-left: 5px solid var(--sun);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    font-size: 0.88rem;
+    box-shadow: var(--shadow);
+  }
+  .notif.unread { border-left-color: var(--ember); background: #fff8f2; }
+  .notif .when { display: block; font-size: 0.72rem; color: var(--ink-soft); margin-top: 4px; }
+  .empty {
+    text-align: center;
+    color: var(--ink-soft);
+    font-size: 0.9rem;
+    padding: 26px 10px;
+    background: var(--card);
+    border: 1.5px dashed var(--line);
+    border-radius: var(--radius);
+  }
+  dialog {
+    border: none;
+    border-radius: var(--radius);
+    box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+    padding: 22px;
+    width: min(440px, 92vw);
+  }
+  dialog::backdrop { background: rgba(35, 71, 48, 0.45); }
+  dialog h3 { margin-bottom: 4px; }
+  dialog .sub { font-size: 0.84rem; color: var(--ink-soft); margin-bottom: 14px; }
+  .toast {
+    position: fixed;
+    bottom: 22px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--pine-dark);
+    color: #fff;
+    padding: 12px 20px;
+    border-radius: 999px;
+    font-size: 0.88rem;
+    font-weight: 600;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s, transform 0.25s;
+    z-index: 100;
+    max-width: 90vw;
+    text-align: center;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(-6px); }
+  .footer-tools { text-align: center; margin-top: 40px; }
+  .name-bar {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow);
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 20px;
+  }
+  .name-bar input { max-width: 200px; }
+  .name-bar .label { font-size: 0.86rem; font-weight: 700; }
+  .toggle-avail { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink-soft); cursor: pointer; }
+  @media (max-width: 560px) {
+    header h1 { font-size: 1.05rem; }
+    header .tagline { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="logo">🏕️</span>
+  <div>
+    <h1>Campfire Kitchen</h1>
+    <div class="tagline">Order breakfast from the camp chef · pick up hot at the fire</div>
+  </div>
+  <div class="spacer"></div>
+  <button class="bell" id="bellBtn" title="Notifications">🔔<span class="badge" id="bellBadge" hidden>0</span></button>
+  <div class="role-toggle" role="tablist" aria-label="Choose view">
+    <button id="roleChef" role="tab">👨‍🍳 Chef</button>
+    <button id="roleCamper" role="tab">🎒 Camper</button>
+  </div>
+</header>
+
+<main id="app"></main>
+
+<dialog id="orderDialog"></dialog>
+<dialog id="mealDialog"></dialog>
+<div class="toast" id="toast"></div>
+
+<script>
+"use strict";
+
+/* ---------------------------------------------------------------
+ * Campfire Kitchen — camp food ordering & pickup for a home chef
+ *
+ * Roles:
+ *  - Chef: sets the meals (what's available) and the time slots
+ *    they're willing to cook, then reviews incoming orders and
+ *    confirms ONE pickup time per meal. Confirming notifies every
+ *    camper who ordered that meal.
+ *  - Camper: browses available meals, places an order with their
+ *    preferred pickup time, and gets notified when the chef locks
+ *    in the actual time.
+ *
+ * State persists in localStorage so the demo survives reloads.
+ * ------------------------------------------------------------- */
+
+const STORE_KEY = "campfire-kitchen-v1";
+const ALL_SLOTS = ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM"];
+
+/* ---------- Sample data set: summertime camp breakfast ---------- */
+function seedData() {
+  const meals = [
+    {
+      id: "m1", emoji: "🥓", name: "Eggs & Bacon Breakfast Sandwich",
+      category: "Sandwich",
+      desc: "Two fried eggs, crispy campfire bacon, and melted cheddar on a griddle-toasted brioche bun.",
+      price: 8.0, available: true,
+      slots: ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM"],
+    },
+    {
+      id: "m2", emoji: "🥐", name: "Sausage, Egg & Cheese Croissant",
+      category: "Sandwich",
+      desc: "Maple breakfast sausage, folded egg, and American cheese tucked into a warm, flaky croissant.",
+      price: 8.5, available: true,
+      slots: ["7:30 AM", "8:00 AM", "8:30 AM"],
+    },
+    {
+      id: "m3", emoji: "🥯", name: "Smoked Ham & Egg Bagel",
+      category: "Sandwich",
+      desc: "Fire-toasted everything bagel with smoked ham, over-medium egg, Swiss, and a swipe of honey mustard.",
+      price: 8.0, available: true,
+      slots: ["8:00 AM", "8:30 AM", "9:00 AM"],
+    },
+    {
+      id: "m4", emoji: "🍳", name: "Campfire Breakfast Bowl",
+      category: "Bowl",
+      desc: "Scrambled eggs over crispy skillet potatoes with bacon crumbles, cheddar, and fire-roasted salsa.",
+      price: 9.5, available: true,
+      slots: ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM"],
+    },
+    {
+      id: "m5", emoji: "🥑", name: "Veggie Sunrise Bowl",
+      category: "Bowl",
+      desc: "Soft-scrambled eggs, black beans, charred peppers and onions, avocado, and cotija over hash browns.",
+      price: 9.0, available: true,
+      slots: ["7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM"],
+    },
+    {
+      id: "m6", emoji: "🥞", name: "Pancake Stack & Bacon Plate",
+      category: "Plate",
+      desc: "Three buttermilk griddle cakes with maple syrup, whipped butter, and two strips of thick-cut bacon.",
+      price: 9.0, available: false,
+      slots: ["8:30 AM", "9:00 AM", "9:30 AM"],
+    },
+  ];
+
+  const orders = [
+    { id: "o1", mealId: "m1", camper: "Riley",  qty: 2, preferred: "7:30 AM", notes: "Extra crispy bacon please!", status: "pending",   confirmedSlot: null },
+    { id: "o2", mealId: "m1", camper: "Sam",    qty: 1, preferred: "7:30 AM", notes: "",                            status: "pending",   confirmedSlot: null },
+    { id: "o3", mealId: "m1", camper: "Dana",   qty: 1, preferred: "8:00 AM", notes: "No cheese",                   status: "pending",   confirmedSlot: null },
+    { id: "o4", mealId: "m4", camper: "Alex",   qty: 1, preferred: "8:00 AM", notes: "Salsa on the side",           status: "pending",   confirmedSlot: null },
+    { id: "o5", mealId: "m4", camper: "Jordan", qty: 2, preferred: "8:30 AM", notes: "",                            status: "pending",   confirmedSlot: null },
+    { id: "o6", mealId: "m5", camper: "Morgan", qty: 1, preferred: "9:00 AM", notes: "Extra avocado",               status: "confirmed", confirmedSlot: "9:00 AM" },
+  ];
+
+  const notifications = [
+    {
+      id: "n1", to: "Morgan", unread: true,
+      text: "👨‍🍳 Chef confirmed: Veggie Sunrise Bowl will be ready for pickup at 9:00 AM at the camp kitchen.",
+      when: "Yesterday 6:42 PM",
+    },
+    {
+      id: "n2", to: "chef", unread: true,
+      text: "🎒 Riley ordered 2× Eggs & Bacon Breakfast Sandwich (prefers 7:30 AM).",
+      when: "Yesterday 8:15 PM",
+    },
+  ];
+
+  return { role: "camper", camperName: "Riley", meals, orders, notifications, nextId: 100 };
+}
+
+/* ------------------------- persistence ------------------------- */
+let state = load();
+function load() {
+  try {
+    const raw = localStorage.getItem(STORE_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* corrupted store — fall through to seed */ }
+  return seedData();
+}
+function save() { localStorage.setItem(STORE_KEY, JSON.stringify(state)); }
+function uid(prefix) { return prefix + (state.nextId++); }
+function nowLabel() {
+  return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " today";
+}
+
+/* --------------------------- helpers --------------------------- */
+const $ = (sel) => document.querySelector(sel);
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+function money(n) { return "$" + n.toFixed(2); }
+function mealById(id) { return state.meals.find((m) => m.id === id); }
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => t.classList.remove("show"), 2600);
+}
+function notify(to, text) {
+  state.notifications.unshift({ id: uid("n"), to, unread: true, text, when: nowLabel() });
+}
+function unreadCount() {
+  const me = state.role === "chef" ? "chef" : state.camperName;
+  return state.notifications.filter((n) => n.unread && (n.to === me || n.to === "all")).length;
+}
+
+/* --------------------------- render ---------------------------- */
+function render() {
+  $("#roleChef").classList.toggle("active", state.role === "chef");
+  $("#roleCamper").classList.toggle("active", state.role === "camper");
+  const badge = $("#bellBadge");
+  const n = unreadCount();
+  badge.hidden = n === 0;
+  badge.textContent = n;
+  $("#app").innerHTML = state.role === "chef" ? chefView() : camperView();
+  save();
+}
+
+/* ========================= CAMPER VIEW ========================= */
+function camperView() {
+  const me = state.camperName;
+  const myOrders = state.orders.filter((o) => o.camper === me);
+  const myNotifs = state.notifications.filter((n) => n.to === me || n.to === "all");
+  const avail = state.meals.filter((m) => m.available);
+
+  return `
+    <div class="name-bar">
+      <span class="label">🎒 Ordering as:</span>
+      <input type="text" id="camperName" value="${esc(me)}" placeholder="Your name">
+      <span class="hint" style="margin:0">Change the name to order as a different camper.</span>
+    </div>
+
+    <div class="section-title">☀️ This morning's menu</div>
+    <p class="hint">Pick a meal and the pickup time you'd prefer. The chef reviews everyone's preferences and confirms one cook time.</p>
+    <div class="cards">
+      ${avail.map((m) => `
+        <div class="card">
+          <div class="meal-head">
+            <span class="meal-emoji">${m.emoji}</span>
+            <div>
+              <div class="meal-name">${esc(m.name)}</div>
+              <div class="meal-cat">${esc(m.category)}</div>
+            </div>
+          </div>
+          <div class="meal-desc">${esc(m.desc)}</div>
+          <div class="meal-meta">
+            <span class="price">${money(m.price)}</span>
+            ${m.slots.map((s) => `<span class="chip slot">${s}</span>`).join("")}
+          </div>
+          <button class="btn primary" onclick="openOrderDialog('${m.id}')">Order</button>
+        </div>
+      `).join("") || `<div class="empty">The chef hasn't posted any meals yet — check back soon!</div>`}
+    </div>
+
+    <div class="section-title">🧾 My orders</div>
+    ${myOrders.length ? `<div class="card">` + myOrders.map((o) => {
+      const m = mealById(o.mealId);
+      return `
+        <div class="order-line">
+          <span>${m.emoji}</span>
+          <span class="who">${o.qty}× ${esc(m.name)}</span>
+          <span class="pref">preferred ${o.preferred}</span>
+          ${o.status === "confirmed"
+            ? `<span class="status confirmed">Pickup ${o.confirmedSlot}</span>`
+            : `<span class="status pending">Awaiting chef</span>
+               <button class="btn ghost small" onclick="cancelOrder('${o.id}')">Cancel</button>`}
+        </div>`;
+    }).join("") + `</div>`
+    : `<div class="empty">No orders yet — grab something off the menu above!</div>`}
+
+    <div class="section-title" id="notifSection">🔔 Notifications</div>
+    ${notifList(myNotifs)}
+
+    <div class="footer-tools">
+      <button class="btn ghost small" onclick="resetDemo()">↺ Reset demo data</button>
+    </div>
+  `;
+}
+
+/* ========================== CHEF VIEW ========================== */
+function chefView() {
+  const chefNotifs = state.notifications.filter((n) => n.to === "chef" || n.to === "all");
+  const pendingByMeal = state.meals
+    .map((m) => ({ meal: m, orders: state.orders.filter((o) => o.mealId === m.id && o.status === "pending") }))
+    .filter((g) => g.orders.length > 0);
+  const confirmed = state.orders.filter((o) => o.status === "confirmed");
+
+  return `
+    <div class="section-title">📋 Review orders &amp; set pickup times</div>
+    <p class="hint">Campers voted with their preferred times. Pick the one time you'll cook each meal — confirming notifies every camper who ordered it.</p>
+    ${pendingByMeal.length ? pendingByMeal.map(chefOrderGroup).join("")
+      : `<div class="empty">No pending orders right now. Time for a coffee by the fire ☕</div>`}
+
+    ${confirmed.length ? `
+      <div class="section-title">✅ Confirmed pickups</div>
+      <div class="card">
+        ${confirmed.map((o) => {
+          const m = mealById(o.mealId);
+          return `<div class="order-line">
+            <span>${m.emoji}</span>
+            <span class="who">${esc(o.camper)}</span>
+            <span>${o.qty}× ${esc(m.name)}</span>
+            <span class="status confirmed">Pickup ${o.confirmedSlot}</span>
+          </div>`;
+        }).join("")}
+      </div>` : ""}
+
+    <div class="section-title">🍳 My meals &amp; cook times</div>
+    <p class="hint">Toggle what's on the menu and set the time slots you're willing to cook.</p>
+    <div class="cards">
+      ${state.meals.map((m) => `
+        <div class="card ${m.available ? "" : "unavailable"}">
+          <div class="meal-head">
+            <span class="meal-emoji">${m.emoji}</span>
+            <div>
+              <div class="meal-name">${esc(m.name)}</div>
+              <div class="meal-cat">${esc(m.category)} · ${money(m.price)}</div>
+            </div>
+          </div>
+          <div class="meal-meta">${m.slots.map((s) => `<span class="chip slot">${s}</span>`).join("")}</div>
+          <div class="row">
+            <label class="toggle-avail">
+              <input type="checkbox" ${m.available ? "checked" : ""} onchange="toggleAvail('${m.id}')">
+              On the menu
+            </label>
+            <span class="spacer"></span>
+            <button class="btn ghost small" onclick="openMealDialog('${m.id}')">Edit</button>
+          </div>
+        </div>
+      `).join("")}
+    </div>
+    <div style="margin-top:14px">
+      <button class="btn green" onclick="openMealDialog(null)">＋ Add a meal</button>
+    </div>
+
+    <div class="section-title" id="notifSection">🔔 Notifications</div>
+    ${notifList(chefNotifs)}
+
+    <div class="footer-tools">
+      <button class="btn ghost small" onclick="resetDemo()">↺ Reset demo data</button>
+    </div>
+  `;
+}
+
+function chefOrderGroup({ meal, orders }) {
+  // Tally preferred times so the chef can see demand at a glance.
+  const counts = {};
+  for (const o of orders) counts[o.preferred] = (counts[o.preferred] || 0) + o.qty;
+  const max = Math.max(...Object.values(counts));
+  const slots = meal.slots.filter((s) => counts[s]).concat(
+    Object.keys(counts).filter((s) => !meal.slots.includes(s)));
+  const totalQty = orders.reduce((a, o) => a + o.qty, 0);
+
+  return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="meal-head">
+        <span class="meal-emoji">${meal.emoji}</span>
+        <div>
+          <div class="meal-name">${esc(meal.name)}</div>
+          <div class="meal-cat">${orders.length} order${orders.length > 1 ? "s" : ""} · ${totalQty} serving${totalQty > 1 ? "s" : ""}</div>
+        </div>
+      </div>
+
+      ${orders.map((o) => `
+        <div class="order-line">
+          <span class="who">${esc(o.camper)}</span>
+          <span>${o.qty}×</span>
+          <span class="pref">prefers ${o.preferred}</span>
+          ${o.notes ? `<span class="chip">📝 ${esc(o.notes)}</span>` : ""}
+        </div>
+      `).join("")}
+
+      <div class="tally">
+        ${slots.map((s) => `
+          <div class="tally-row">
+            <span class="t-slot">${s}</span>
+            <span class="t-bar" style="width:${(counts[s] / max) * 140}px"></span>
+            <span class="t-count">${counts[s]} serving${counts[s] > 1 ? "s" : ""} preferred</span>
+          </div>
+        `).join("")}
+      </div>
+
+      <div class="row">
+        <select id="confirm-${meal.id}">
+          ${meal.slots.map((s) => `<option value="${s}" ${counts[s] === max ? "selected" : ""}>${s}${counts[s] ? ` (${counts[s]} preferred)` : ""}</option>`).join("")}
+        </select>
+        <button class="btn green" onclick="confirmMealTime('${meal.id}')">Confirm time &amp; notify campers</button>
+      </div>
+    </div>
+  `;
+}
+
+function notifList(list) {
+  if (!list.length) return `<div class="empty">Nothing yet.</div>`;
+  return list.map((n) => `
+    <div class="notif ${n.unread ? "unread" : ""}">
+      ${esc(n.text)}
+      <span class="when">${esc(n.when)}</span>
+    </div>
+  `).join("");
+}
+
+/* --------------------------- actions --------------------------- */
+function setRole(role) { state.role = role; render(); }
+
+function toggleAvail(id) {
+  const m = mealById(id);
+  m.available = !m.available;
+  render();
+  toast(m.available ? `${m.name} is back on the menu` : `${m.name} removed from the menu`);
+}
+
+function cancelOrder(id) {
+  const o = state.orders.find((x) => x.id === id);
+  if (!o) return;
+  state.orders = state.orders.filter((x) => x.id !== id);
+  notify("chef", `🎒 ${o.camper} cancelled their ${mealById(o.mealId).name} order.`);
+  render();
+  toast("Order cancelled");
+}
+
+function confirmMealTime(mealId) {
+  const meal = mealById(mealId);
+  const slot = $(`#confirm-${mealId}`).value;
+  const affected = state.orders.filter((o) => o.mealId === mealId && o.status === "pending");
+  for (const o of affected) {
+    o.status = "confirmed";
+    o.confirmedSlot = slot;
+    notify(o.camper, `👨‍🍳 Chef confirmed: ${meal.name} will be ready for pickup at ${slot} at the camp kitchen.`);
+  }
+  render();
+  toast(`📣 ${affected.length} camper${affected.length !== 1 ? "s" : ""} notified — ${meal.name} at ${slot}`);
+}
+
+function markNotifsRead() {
+  const me = state.role === "chef" ? "chef" : state.camperName;
+  for (const n of state.notifications) {
+    if (n.to === me || n.to === "all") n.unread = false;
+  }
+  render();
+  const target = $("#notifSection");
+  if (target) target.scrollIntoView({ behavior: "smooth" });
+}
+
+function resetDemo() {
+  if (!confirm("Reset all meals, orders, and notifications back to the sample data?")) return;
+  state = seedData();
+  render();
+  toast("Demo data reset");
+}
+
+/* ----------------------- order dialog -------------------------- */
+let dialogSlot = null;
+
+function openOrderDialog(mealId) {
+  const m = mealById(mealId);
+  dialogSlot = null;
+  const dlg = $("#orderDialog");
+  dlg.innerHTML = `
+    <h3>${m.emoji} ${esc(m.name)}</h3>
+    <div class="sub">${money(m.price)} · pick your preferred pickup time. The chef confirms the final time for everyone.</div>
+    <div class="field">
+      <label>Preferred pickup time</label>
+      <div class="slot-picker" id="dlgSlots">
+        ${m.slots.map((s) => `<button type="button" data-slot="${s}">${s}</button>`).join("")}
+      </div>
+    </div>
+    <div class="field">
+      <label>How many?</label>
+      <input type="number" id="dlgQty" min="1" max="10" value="1">
+    </div>
+    <div class="field">
+      <label>Notes for the chef (optional)</label>
+      <input type="text" id="dlgNotes" placeholder="e.g. no cheese, extra crispy…">
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('orderDialog').close()">Never mind</button>
+      <button class="btn primary" id="dlgPlace" disabled onclick="placeOrder('${m.id}')">Place order</button>
+    </div>
+  `;
+  dlg.querySelectorAll("#dlgSlots button").forEach((b) => {
+    b.onclick = () => {
+      dlg.querySelectorAll("#dlgSlots button").forEach((x) => x.classList.remove("selected"));
+      b.classList.add("selected");
+      dialogSlot = b.dataset.slot;
+      $("#dlgPlace").disabled = false;
+    };
+  });
+  dlg.showModal();
+}
+
+function placeOrder(mealId) {
+  const name = state.camperName.trim();
+  if (!name) { toast("Set your name at the top first!"); return; }
+  const qty = Math.max(1, parseInt($("#dlgQty").value, 10) || 1);
+  const notes = $("#dlgNotes").value.trim();
+  const meal = mealById(mealId);
+  state.orders.push({
+    id: uid("o"), mealId, camper: name, qty,
+    preferred: dialogSlot, notes, status: "pending", confirmedSlot: null,
+  });
+  notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${dialogSlot}).${notes ? " Note: " + notes : ""}`);
+  $("#orderDialog").close();
+  render();
+  toast(`Order placed! The chef will confirm the pickup time.`);
+}
+
+/* --------------------- meal editor dialog ---------------------- */
+function openMealDialog(mealId) {
+  const m = mealId ? mealById(mealId) : null;
+  const slots = m ? [...m.slots] : ["7:30 AM", "8:00 AM"];
+  const dlg = $("#mealDialog");
+  dlg.innerHTML = `
+    <h3>${m ? "Edit meal" : "Add a meal"}</h3>
+    <div class="sub">Set what you're cooking and the times you're willing to cook it.</div>
+    <div class="field"><label>Name</label><input type="text" id="mName" value="${m ? esc(m.name) : ""}" placeholder="e.g. Breakfast Burrito"></div>
+    <div class="field"><label>Emoji</label><input type="text" id="mEmoji" value="${m ? m.emoji : "🍳"}" maxlength="4"></div>
+    <div class="field"><label>Category</label>
+      <select id="mCat">
+        ${["Sandwich", "Bowl", "Plate", "Drink", "Other"].map((c) =>
+          `<option ${m && m.category === c ? "selected" : ""}>${c}</option>`).join("")}
+      </select>
+    </div>
+    <div class="field"><label>Description</label><textarea id="mDesc" rows="2">${m ? esc(m.desc) : ""}</textarea></div>
+    <div class="field"><label>Price ($)</label><input type="number" id="mPrice" min="0" step="0.5" value="${m ? m.price : 8}"></div>
+    <div class="field">
+      <label>Cook time slots</label>
+      <div class="slot-picker" id="mSlots">
+        ${ALL_SLOTS.map((s) => `<button type="button" data-slot="${s}" class="${slots.includes(s) ? "selected" : ""}">${s}</button>`).join("")}
+      </div>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('mealDialog').close()">Cancel</button>
+      <button class="btn green" onclick="saveMeal(${m ? `'${m.id}'` : "null"})">Save meal</button>
+    </div>
+  `;
+  dlg.querySelectorAll("#mSlots button").forEach((b) => {
+    b.onclick = () => b.classList.toggle("selected");
+  });
+  dlg.showModal();
+}
+
+function saveMeal(mealId) {
+  const name = $("#mName").value.trim();
+  if (!name) { toast("Give the meal a name"); return; }
+  const slots = [...document.querySelectorAll("#mSlots button.selected")].map((b) => b.dataset.slot);
+  if (!slots.length) { toast("Pick at least one cook time slot"); return; }
+  const data = {
+    name,
+    emoji: $("#mEmoji").value.trim() || "🍳",
+    category: $("#mCat").value,
+    desc: $("#mDesc").value.trim(),
+    price: Math.max(0, parseFloat($("#mPrice").value) || 0),
+    slots,
+  };
+  if (mealId) {
+    Object.assign(mealById(mealId), data);
+  } else {
+    state.meals.push({ id: uid("m"), available: true, ...data });
+  }
+  $("#mealDialog").close();
+  render();
+  toast(mealId ? "Meal updated" : `${data.name} added to the menu`);
+}
+
+/* --------------------------- wiring ---------------------------- */
+$("#roleChef").onclick = () => setRole("chef");
+$("#roleCamper").onclick = () => setRole("camper");
+$("#bellBtn").onclick = markNotifsRead;
+$("#app").addEventListener("input", (e) => {
+  if (e.target.id === "camperName") {
+    state.camperName = e.target.value;
+    save();
+    // update bell badge without a full re-render (would blur the input)
+    const n = unreadCount();
+    $("#bellBadge").hidden = n === 0;
+    $("#bellBadge").textContent = n;
+  }
+});
+$("#app").addEventListener("change", (e) => {
+  if (e.target.id === "camperName") render();
+});
+
+render();
+</script>
+</body>
+</html>

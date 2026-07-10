@@ -1,0 +1,68 @@
+{
+  "description": "Sample breakfast data set for Campfire Kitchen — camp food ordering & pickup. Mirrors the seed data embedded in index.html.",
+  "timeSlots": ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM"],
+  "meals": [
+    {
+      "id": "m1",
+      "name": "Eggs & Bacon Breakfast Sandwich",
+      "category": "Sandwich",
+      "description": "Two fried eggs, crispy campfire bacon, and melted cheddar on a griddle-toasted brioche bun.",
+      "price": 8.00,
+      "available": true,
+      "cookSlots": ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM"]
+    },
+    {
+      "id": "m2",
+      "name": "Sausage, Egg & Cheese Croissant",
+      "category": "Sandwich",
+      "description": "Maple breakfast sausage, folded egg, and American cheese tucked into a warm, flaky croissant.",
+      "price": 8.50,
+      "available": true,
+      "cookSlots": ["7:30 AM", "8:00 AM", "8:30 AM"]
+    },
+    {
+      "id": "m3",
+      "name": "Smoked Ham & Egg Bagel",
+      "category": "Sandwich",
+      "description": "Fire-toasted everything bagel with smoked ham, over-medium egg, Swiss, and a swipe of honey mustard.",
+      "price": 8.00,
+      "available": true,
+      "cookSlots": ["8:00 AM", "8:30 AM", "9:00 AM"]
+    },
+    {
+      "id": "m4",
+      "name": "Campfire Breakfast Bowl",
+      "category": "Bowl",
+      "description": "Scrambled eggs over crispy skillet potatoes with bacon crumbles, cheddar, and fire-roasted salsa.",
+      "price": 9.50,
+      "available": true,
+      "cookSlots": ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM"]
+    },
+    {
+      "id": "m5",
+      "name": "Veggie Sunrise Bowl",
+      "category": "Bowl",
+      "description": "Soft-scrambled eggs, black beans, charred peppers and onions, avocado, and cotija over hash browns.",
+      "price": 9.00,
+      "available": true,
+      "cookSlots": ["7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM"]
+    },
+    {
+      "id": "m6",
+      "name": "Pancake Stack & Bacon Plate",
+      "category": "Plate",
+      "description": "Three buttermilk griddle cakes with maple syrup, whipped butter, and two strips of thick-cut bacon.",
+      "price": 9.00,
+      "available": false,
+      "cookSlots": ["8:30 AM", "9:00 AM", "9:30 AM"]
+    }
+  ],
+  "orders": [
+    { "id": "o1", "mealId": "m1", "camper": "Riley",  "qty": 2, "preferredSlot": "7:30 AM", "notes": "Extra crispy bacon please!", "status": "pending",   "confirmedSlot": null },
+    { "id": "o2", "mealId": "m1", "camper": "Sam",    "qty": 1, "preferredSlot": "7:30 AM", "notes": "",                           "status": "pending",   "confirmedSlot": null },
+    { "id": "o3", "mealId": "m1", "camper": "Dana",   "qty": 1, "preferredSlot": "8:00 AM", "notes": "No cheese",                  "status": "pending",   "confirmedSlot": null },
+    { "id": "o4", "mealId": "m4", "camper": "Alex",   "qty": 1, "preferredSlot": "8:00 AM", "notes": "Salsa on the side",          "status": "pending",   "confirmedSlot": null },
+    { "id": "o5", "mealId": "m4", "camper": "Jordan", "qty": 2, "preferredSlot": "8:30 AM", "notes": "",                           "status": "pending",   "confirmedSlot": null },
+    { "id": "o6", "mealId": "m5", "camper": "Morgan", "qty": 1, "preferredSlot": "9:00 AM", "notes": "Extra avocado",              "status": "confirmed", "confirmedSlot": "9:00 AM" }
+  ]
+}
