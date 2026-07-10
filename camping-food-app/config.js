@@ -13,7 +13,7 @@
  * ---------------------------------------------------------------- */
 window.CAMPFIRE_CONFIG = {
   // e.g. "https://abcdefghijk.supabase.co"
-  supabaseUrl: "",
+  supabaseUrl: "https://ocqtujgxftdbjuuhrlxl.supabase.co",
 
   // The "anon / public" API key from Supabase → Settings → API.
   // (It is safe-ish to publish for a demo, but anyone who finds it
