@@ -77,6 +77,15 @@
     border-radius: 50%;
     cursor: pointer;
   }
+  .sync-pill {
+    font-size: 0.72rem;
+    font-weight: 700;
+    background: rgba(255,255,255,0.15);
+    border-radius: 999px;
+    padding: 5px 11px;
+    white-space: nowrap;
+  }
+  .sync-pill.offline { background: rgba(226, 112, 58, 0.55); }
   .bell .badge {
     position: absolute;
     top: -4px;
@@ -310,6 +319,7 @@
     <div class="tagline">Order breakfast from the camp chef · pick up hot at the fire</div>
   </div>
   <div class="spacer"></div>
+  <span class="sync-pill" id="syncPill" title="Storage mode"></span>
   <button class="bell" id="bellBtn" title="Notifications">🔔<span class="badge" id="bellBadge" hidden>0</span></button>
   <div class="role-toggle" role="tablist" aria-label="Choose view">
     <button id="roleChef" role="tab">👨‍🍳 Chef</button>
@@ -324,6 +334,7 @@
 <dialog id="rateDialog"></dialog>
 <div class="toast" id="toast"></div>
 
+<script src="config.js"></script>
 <script>
 "use strict";
 
@@ -344,10 +355,23 @@
  * and send the chef a compliment, which lands on the chef's
  * kudos board.
  *
- * State persists in localStorage so the demo survives reloads.
+ * Storage modes (see config.js):
+ *  - Device-only demo (default): shared state lives in this
+ *    browser's localStorage. Great for trying the app, but each
+ *    device sees its own copy.
+ *  - Live sync: with supabaseUrl + supabaseAnonKey configured,
+ *    meals/orders/notifications live in one shared Supabase row
+ *    so every phone sees the same data. Writes use optimistic
+ *    concurrency (a version column) and the app polls for
+ *    changes every few seconds.
+ * Per-device things (which view you're in, your camper name)
+ * always stay local.
  * ------------------------------------------------------------- */
 
 const STORE_KEY = "campfire-kitchen-v2";
+const PREFS_KEY = "campfire-kitchen-prefs-v1";
+const CFG = window.CAMPFIRE_CONFIG || {};
+const REMOTE = !!(CFG.supabaseUrl && CFG.supabaseAnonKey);
 const ALL_SLOTS = ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM", "9:30 AM"];
 
 /* ---------- Sample data set: summertime camp breakfast ---------- */
@@ -426,19 +450,49 @@ function seedData() {
     },
   ];
 
-  return { role: "camper", camperName: "Riley", meals, orders, notifications, nextId: 100 };
+  return { meals, orders, notifications, nextId: 100 };
 }
 
-/* ------------------------- persistence ------------------------- */
-let state = load();
-function load() {
+/* ------------------------- persistence -------------------------
+ * `state`  — the SHARED data (meals, orders, notifications).
+ * `prefs`  — per-device data (current view, camper name); always
+ *            stored locally, never synced.
+ * All shared mutations go through commit(mutator). In device-only
+ * mode the mutator runs and saves locally. In live-sync mode the
+ * write is pushed with a version check; on conflict the latest
+ * state is fetched and the mutator re-applied (so mutators must
+ * be safe to re-run).
+ * -------------------------------------------------------------- */
+let state = null;
+let stateVersion = 0; // remote row version (live-sync mode)
+let prefs = loadPrefs();
+
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* fall through */ }
+  // In live-sync mode campers must type their real name first.
+  return { role: "camper", camperName: REMOTE ? "" : "Riley" };
+}
+function savePrefs() {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (e) { /* non-fatal */ }
+}
+
+function loadLocal() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (s && s.meals) {
+        delete s.role; delete s.camperName; // migrate pre-prefs blobs
+        return s;
+      }
+    }
   } catch (e) { /* corrupted store — fall through to seed */ }
   return seedData();
 }
-function save() {
+function saveLocal() {
   try {
     localStorage.setItem(STORE_KEY, JSON.stringify(state));
   } catch (e) {
@@ -446,6 +500,113 @@ function save() {
     toast("⚠️ Local storage is full — try removing a meal photo");
   }
 }
+
+/* ------------------ live sync (Supabase REST) ------------------ */
+const SB_URL = REMOTE ? `${CFG.supabaseUrl.replace(/\/$/, "")}/rest/v1/campfire_state` : null;
+const SB_HEADERS = REMOTE ? {
+  apikey: CFG.supabaseAnonKey,
+  Authorization: `Bearer ${CFG.supabaseAnonKey}`,
+  "Content-Type": "application/json",
+} : null;
+
+function setSyncPill(mode) {
+  const el = $("#syncPill");
+  if (!el) return;
+  el.classList.toggle("offline", mode === "offline");
+  el.textContent = !REMOTE ? "💾 Device-only demo"
+    : mode === "offline" ? "⚠️ Reconnecting…"
+    : "🟢 Live sync";
+}
+
+async function remoteFetchRow() {
+  const res = await fetch(`${SB_URL}?id=eq.1&select=version,data`, { headers: SB_HEADERS });
+  if (!res.ok) throw new Error(`fetch ${res.status}`);
+  const rows = await res.json();
+  return rows[0] || null;
+}
+
+// Push the whole state, but only if nobody else wrote since we
+// last read (version filter). Returns true on success.
+async function remotePush() {
+  const res = await fetch(`${SB_URL}?id=eq.1&version=eq.${stateVersion}`, {
+    method: "PATCH",
+    headers: { ...SB_HEADERS, Prefer: "return=representation" },
+    body: JSON.stringify({ version: stateVersion + 1, data: state }),
+  });
+  if (!res.ok) throw new Error(`push ${res.status}`);
+  const rows = await res.json();
+  if (rows.length === 0) return false; // version conflict
+  stateVersion += 1;
+  return true;
+}
+
+async function remoteInit() {
+  let row = await remoteFetchRow();
+  if (!row) {
+    // First client ever: seed the shared row. If two clients race,
+    // one POST fails and we just re-fetch.
+    await fetch(SB_URL, {
+      method: "POST",
+      headers: { ...SB_HEADERS, Prefer: "resolution=ignore-duplicates" },
+      body: JSON.stringify({ id: 1, version: 1, data: seedData() }),
+    });
+    row = await remoteFetchRow();
+    if (!row) throw new Error("could not seed shared state");
+  }
+  state = row.data;
+  stateVersion = row.version;
+}
+
+async function remoteRefresh() {
+  const row = await remoteFetchRow();
+  if (row && row.version !== stateVersion) {
+    state = row.data;
+    stateVersion = row.version;
+    return true;
+  }
+  return false;
+}
+
+const POLL_MS = 4000;
+function startPolling() {
+  setInterval(async () => {
+    try {
+      const changed = await remoteRefresh();
+      setSyncPill("ok");
+      if (changed) render();
+    } catch (e) {
+      setSyncPill("offline");
+    }
+  }, POLL_MS);
+}
+
+/* -------- commit: the single write path for shared state -------- */
+async function commit(mutator) {
+  if (!REMOTE) {
+    mutator(state);
+    render();
+    return true;
+  }
+  try {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      mutator(state);
+      if (await remotePush()) {
+        setSyncPill("ok");
+        render();
+        return true;
+      }
+      // Someone else wrote first — take their state and re-apply.
+      await remoteRefresh();
+    }
+    toast("⚠️ The camp kitchen is busy — change not saved, please retry");
+  } catch (e) {
+    setSyncPill("offline");
+    toast("⚠️ Can't reach the camp kitchen server — check your connection");
+  }
+  render();
+  return false;
+}
+
 function uid(prefix) { return prefix + (state.nextId++); }
 function nowLabel() {
   return new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) + " today";
@@ -480,25 +641,26 @@ function notify(to, text) {
   state.notifications.unshift({ id: uid("n"), to, unread: true, text, when: nowLabel() });
 }
 function unreadCount() {
-  const me = state.role === "chef" ? "chef" : state.camperName;
+  const me = prefs.role === "chef" ? "chef" : prefs.camperName;
   return state.notifications.filter((n) => n.unread && (n.to === me || n.to === "all")).length;
 }
 
 /* --------------------------- render ---------------------------- */
 function render() {
-  $("#roleChef").classList.toggle("active", state.role === "chef");
-  $("#roleCamper").classList.toggle("active", state.role === "camper");
+  $("#roleChef").classList.toggle("active", prefs.role === "chef");
+  $("#roleCamper").classList.toggle("active", prefs.role === "camper");
   const badge = $("#bellBadge");
   const n = unreadCount();
   badge.hidden = n === 0;
   badge.textContent = n;
-  $("#app").innerHTML = state.role === "chef" ? chefView() : camperView();
-  save();
+  $("#app").innerHTML = prefs.role === "chef" ? chefView() : camperView();
+  savePrefs();
+  if (!REMOTE) saveLocal();
 }
 
 /* ========================= CAMPER VIEW ========================= */
 function camperView() {
-  const me = state.camperName;
+  const me = prefs.camperName;
   const myOrders = state.orders.filter((o) => o.camper === me);
   const myNotifs = state.notifications.filter((n) => n.to === me || n.to === "all");
   const avail = state.meals.filter((m) => m.available);
@@ -564,7 +726,7 @@ function camperView() {
     ${notifList(myNotifs)}
 
     <div class="footer-tools">
-      <button class="btn ghost small" onclick="resetDemo()">↺ Reset demo data</button>
+      ${REMOTE ? "" : `<button class="btn ghost small" onclick="resetDemo()">↺ Reset demo data</button>`}
     </div>
   `;
 }
@@ -719,47 +881,80 @@ function notifList(list) {
   `).join("");
 }
 
-/* --------------------------- actions --------------------------- */
-function setRole(role) { state.role = role; render(); }
+/* --------------------------- actions ---------------------------
+ * Mutators passed to commit() may re-run on a fresher copy of the
+ * shared state after a sync conflict, so they always look items up
+ * by id inside the mutator. */
+function setRole(role) {
+  if (role === "chef" && CFG.chefPin && sessionStorage.getItem("campfire-chef-ok") !== "1") {
+    const pin = prompt("Chef PIN:");
+    if (pin !== String(CFG.chefPin)) {
+      if (pin !== null) toast("Wrong PIN — ask the chef!");
+      return;
+    }
+    sessionStorage.setItem("campfire-chef-ok", "1");
+  }
+  prefs.role = role;
+  render();
+}
 
 function toggleAvail(id) {
-  const m = mealById(id);
-  m.available = !m.available;
-  render();
-  toast(m.available ? `${m.name} is back on the menu` : `${m.name} removed from the menu`);
+  let onMenu;
+  commit((s) => {
+    const m = s.meals.find((x) => x.id === id);
+    if (!m) return;
+    m.available = !m.available;
+    onMenu = m.available;
+  }).then((ok) => {
+    if (!ok || onMenu === undefined) return;
+    const m = mealById(id);
+    toast(onMenu ? `${m.name} is back on the menu` : `${m.name} removed from the menu`);
+  });
 }
 
 function cancelOrder(id) {
-  const o = state.orders.find((x) => x.id === id);
-  if (!o) return;
-  state.orders = state.orders.filter((x) => x.id !== id);
-  notify("chef", `🎒 ${o.camper} cancelled their ${mealById(o.mealId).name} order.`);
-  render();
-  toast("Order cancelled");
+  commit((s) => {
+    const o = s.orders.find((x) => x.id === id);
+    if (!o) return;
+    s.orders = s.orders.filter((x) => x.id !== id);
+    notify("chef", `🎒 ${o.camper} cancelled their ${s.meals.find((m) => m.id === o.mealId).name} order.`);
+  }).then((ok) => { if (ok) toast("Order cancelled"); });
 }
 
 function confirmMealTime(mealId) {
-  const meal = mealById(mealId);
   const slot = $(`#confirm-${mealId}`).value;
-  const affected = state.orders.filter((o) => o.mealId === mealId && o.status === "pending");
-  for (const o of affected) {
-    o.status = "confirmed";
-    o.confirmedSlot = slot;
-    notify(o.camper, `👨‍🍳 Chef confirmed: ${meal.name} will be ready for pickup at ${slot} at the camp kitchen.`);
-  }
-  render();
-  toast(`📣 ${affected.length} camper${affected.length !== 1 ? "s" : ""} notified — ${meal.name} at ${slot}`);
+  let count = 0, mealName = "";
+  commit((s) => {
+    const meal = s.meals.find((m) => m.id === mealId);
+    if (!meal) return;
+    mealName = meal.name;
+    const affected = s.orders.filter((o) => o.mealId === mealId && o.status === "pending");
+    count = affected.length;
+    for (const o of affected) {
+      o.status = "confirmed";
+      o.confirmedSlot = slot;
+      notify(o.camper, `👨‍🍳 Chef confirmed: ${meal.name} will be ready for pickup at ${slot} at the camp kitchen.`);
+    }
+  }).then((ok) => {
+    if (ok) toast(`📣 ${count} camper${count !== 1 ? "s" : ""} notified — ${mealName} at ${slot}`);
+  });
 }
 
 function markServed(mealId) {
-  const meal = mealById(mealId);
-  const affected = state.orders.filter((o) => o.mealId === mealId && o.status === "confirmed");
-  for (const o of affected) {
-    o.status = "served";
-    notify(o.camper, `🍽️ Hope you enjoyed the ${meal.name}! Tap “Rate & thank the chef” on your order to rate the meal and send a compliment.`);
-  }
-  render();
-  toast(`🍽️ ${meal.name} served — ${affected.length} camper${affected.length !== 1 ? "s" : ""} asked to rate & thank the chef`);
+  let count = 0, mealName = "";
+  commit((s) => {
+    const meal = s.meals.find((m) => m.id === mealId);
+    if (!meal) return;
+    mealName = meal.name;
+    const affected = s.orders.filter((o) => o.mealId === mealId && o.status === "confirmed");
+    count = affected.length;
+    for (const o of affected) {
+      o.status = "served";
+      notify(o.camper, `🍽️ Hope you enjoyed the ${meal.name}! Tap “Rate & thank the chef” on your order to rate the meal and send a compliment.`);
+    }
+  }).then((ok) => {
+    if (ok) toast(`🍽️ ${mealName} served — ${count} camper${count !== 1 ? "s" : ""} asked to rate & thank the chef`);
+  });
 }
 
 /* ----------------------- rate dialog --------------------------- */
@@ -801,32 +996,39 @@ function openRateDialog(orderId) {
 }
 
 function submitReview(orderId) {
-  const o = state.orders.find((x) => x.id === orderId);
-  if (!o || !rateStars) return;
+  if (!rateStars) return;
   const comment = $("#rateComment").value.trim();
-  const m = mealById(o.mealId);
-  o.review = { rating: rateStars, comment, when: nowLabel() };
-  notify("chef", `💛 ${o.camper} rated ${m.name} ${"★".repeat(rateStars)}${comment ? ` — “${comment}”` : ""}`);
+  const stars = rateStars;
+  const when = nowLabel();
+  commit((s) => {
+    const o = s.orders.find((x) => x.id === orderId);
+    if (!o) return;
+    const m = s.meals.find((x) => x.id === o.mealId);
+    o.review = { rating: stars, comment, when };
+    notify("chef", `💛 ${o.camper} rated ${m.name} ${"★".repeat(stars)}${comment ? ` — “${comment}”` : ""}`);
+  }).then((ok) => {
+    if (ok) toast("Thanks! Your rating and compliments were sent to the chef 💛");
+  });
   $("#rateDialog").close();
-  render();
-  toast("Thanks! Your rating and compliments were sent to the chef 💛");
 }
 
 function markNotifsRead() {
-  const me = state.role === "chef" ? "chef" : state.camperName;
-  for (const n of state.notifications) {
-    if (n.to === me || n.to === "all") n.unread = false;
-  }
-  render();
-  const target = $("#notifSection");
-  if (target) target.scrollIntoView({ behavior: "smooth" });
+  const me = prefs.role === "chef" ? "chef" : prefs.camperName;
+  commit((s) => {
+    for (const n of s.notifications) {
+      if (n.to === me || n.to === "all") n.unread = false;
+    }
+  }).then(() => {
+    const target = $("#notifSection");
+    if (target) target.scrollIntoView({ behavior: "smooth" });
+  });
 }
 
 function resetDemo() {
   if (!confirm("Reset all meals, orders, and notifications back to the sample data?")) return;
-  state = seedData();
-  render();
-  toast("Demo data reset");
+  commit((s) => {
+    Object.assign(s, seedData());
+  }).then((ok) => { if (ok) toast("Demo data reset"); });
 }
 
 /* ----------------------- order dialog -------------------------- */
@@ -870,19 +1072,23 @@ function openOrderDialog(mealId) {
 }
 
 function placeOrder(mealId) {
-  const name = state.camperName.trim();
+  const name = prefs.camperName.trim();
   if (!name) { toast("Set your name at the top first!"); return; }
   const qty = Math.max(1, parseInt($("#dlgQty").value, 10) || 1);
   const notes = $("#dlgNotes").value.trim();
-  const meal = mealById(mealId);
-  state.orders.push({
-    id: uid("o"), mealId, camper: name, qty,
-    preferred: dialogSlot, notes, status: "pending", confirmedSlot: null, review: null,
+  const slot = dialogSlot;
+  commit((s) => {
+    const meal = s.meals.find((m) => m.id === mealId);
+    if (!meal) return;
+    s.orders.push({
+      id: uid("o"), mealId, camper: name, qty,
+      preferred: slot, notes, status: "pending", confirmedSlot: null, review: null,
+    });
+    notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot}).${notes ? " Note: " + notes : ""}`);
+  }).then((ok) => {
+    if (ok) toast(`Order placed! The chef will confirm the pickup time.`);
   });
-  notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${dialogSlot}).${notes ? " Note: " + notes : ""}`);
   $("#orderDialog").close();
-  render();
-  toast(`Order placed! The chef will confirm the pickup time.`);
 }
 
 /* --------------------- meal editor dialog ---------------------- */
@@ -985,14 +1191,17 @@ function saveMeal(mealId) {
     slots,
     photo: pendingPhoto,
   };
-  if (mealId) {
-    Object.assign(mealById(mealId), data);
-  } else {
-    state.meals.push({ id: uid("m"), available: true, ...data });
-  }
+  commit((s) => {
+    if (mealId) {
+      const m = s.meals.find((x) => x.id === mealId);
+      if (m) Object.assign(m, data);
+    } else {
+      s.meals.push({ id: uid("m"), available: true, ...data });
+    }
+  }).then((ok) => {
+    if (ok) toast(mealId ? "Meal updated" : `${data.name} added to the menu`);
+  });
   $("#mealDialog").close();
-  render();
-  toast(mealId ? "Meal updated" : `${data.name} added to the menu`);
 }
 
 /* --------------------------- wiring ---------------------------- */
@@ -1001,8 +1210,8 @@ $("#roleCamper").onclick = () => setRole("camper");
 $("#bellBtn").onclick = markNotifsRead;
 $("#app").addEventListener("input", (e) => {
   if (e.target.id === "camperName") {
-    state.camperName = e.target.value;
-    save();
+    prefs.camperName = e.target.value;
+    savePrefs();
     // update bell badge without a full re-render (would blur the input)
     const n = unreadCount();
     $("#bellBadge").hidden = n === 0;
@@ -1013,7 +1222,29 @@ $("#app").addEventListener("change", (e) => {
   if (e.target.id === "camperName") render();
 });
 
-render();
+/* --------------------------- startup --------------------------- */
+async function init() {
+  setSyncPill("ok");
+  if (!REMOTE) {
+    state = loadLocal();
+    render();
+    return;
+  }
+  $("#app").innerHTML = `<div class="empty">⛺ Connecting to the camp kitchen…</div>`;
+  try {
+    await remoteInit();
+    render();
+  } catch (e) {
+    setSyncPill("offline");
+    $("#app").innerHTML = `<div class="empty">⚠️ Couldn't reach the camp kitchen server.<br>
+      Check your connection (and the Supabase settings in <code>config.js</code>), then
+      <a href="javascript:location.reload()">reload</a>.</div>`;
+    return;
+  }
+  startPolling();
+}
+
+init();
 </script>
 </body>
 </html>

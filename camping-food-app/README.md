@@ -1,15 +1,64 @@
 # 🏕️ Campfire Kitchen
 
 A summertime camping food-ordering and pickup app for a home chef, built as a
-single self-contained web page — no build step, no server, no dependencies.
+static web page — no build step, no dependencies.
 
-## Run it
+## Run it locally
 
 Open `index.html` in any browser. That's it.
 
-State (meals, orders, notifications) is stored in the browser's
-`localStorage`, so it survives reloads. Use **↺ Reset demo data** at the
-bottom of either view to restore the sample data.
+Without a backend configured (see below), the app runs in **device-only demo
+mode**: meals, orders, and notifications are stored in the browser's
+`localStorage`, so they survive reloads but each device sees its own copy.
+Use **↺ Reset demo data** at the bottom to restore the sample data. The pill
+in the header always shows which mode you're in.
+
+## Deploy to the web (GitHub Pages)
+
+The repo has a GitHub Actions workflow
+(`.github/workflows/deploy-camping-app.yml`) that publishes this directory to
+GitHub Pages on every push that touches `camping-food-app/`. Once it has run,
+the app is live at:
+
+**https://devtator.github.io/SmartThingsPublic/**
+
+Notes:
+- If the workflow doesn't run, enable Actions for the repo (GitHub → Actions
+  tab → enable) — workflows can start disabled on forks.
+- If deployment is rejected with an environment-protection error, allow the
+  deploying branch under Settings → Environments → `github-pages` →
+  Deployment branches, or set Settings → Pages → Source to "GitHub Actions".
+
+## Make it multi-user (live sync)
+
+Out of the box the deployed page still uses device-only storage — fine for
+showing the UI around, but a camper's order won't reach the chef's phone.
+To test with real users, plug in a free [Supabase](https://supabase.com)
+project as the shared store:
+
+1. Create a Supabase account and a new project (free tier is plenty).
+2. In the project's **SQL Editor**, paste and run
+   [`supabase-setup.sql`](supabase-setup.sql). It creates one `campfire_state`
+   table that holds the whole app state as JSON with a version counter.
+3. In **Settings → API**, copy the *Project URL* and the *anon public* key.
+4. Paste both into [`config.js`](config.js), optionally set a `chefPin`,
+   commit, and push — the workflow redeploys automatically.
+
+The header pill flips to **🟢 Live sync**: every phone now sees the same
+menu, orders, and notifications. The app polls for changes every 4 seconds
+and pushes writes with optimistic concurrency (conflicting writes are retried
+against the latest state, so two campers ordering at once both get through).
+Per-device things — which view you're in, your camper name — stay local.
+
+**Pilot-grade caveats, on purpose:**
+- The anon key in `config.js` is public. Anyone who finds the URL can read
+  and write the shared data. Fine for a campground pilot; not for real money.
+- The `chefPin` is a courtesy gate to keep campers out of the Chef view, not
+  real security.
+- Notifications appear when the app polls (in-app), they are not push
+  notifications to a closed phone.
+- In live sync the **Reset demo data** button only appears in the Chef view,
+  so a camper can't wipe the shared state.
 
 ## How it works
 
@@ -75,4 +124,7 @@ The same data set is available as machine-readable JSON in
 ## Files
 
 - `index.html` — the entire app (markup, styles, and logic)
+- `config.js` — deployment settings: Supabase URL/key for live sync, chef PIN
+- `supabase-setup.sql` — one-time table setup for the live-sync backend
 - `sample-data.json` — the sample breakfast data set as standalone JSON
+- `../.github/workflows/deploy-camping-app.yml` — auto-deploy to GitHub Pages
