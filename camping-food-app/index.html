@@ -197,6 +197,34 @@
   .review-line .quote { color: var(--ink-soft); font-style: italic; margin-top: 3px; }
   .photo-preview-wrap { display: flex; align-items: flex-start; gap: 10px; }
   .photo-preview-wrap .meal-photo { height: 90px; width: 140px; }
+  .login-wrap { max-width: 420px; margin: 7vh auto 0; }
+  .login-emoji { font-size: 2.4rem; text-align: center; }
+  .login-wrap h2 { text-align: center; font-size: 1.2rem; }
+  .login-wrap .hint { text-align: center; margin: 0; }
+  .code-input {
+    text-align: center;
+    font-size: 1.5rem;
+    letter-spacing: 8px;
+    font-weight: 700;
+  }
+  .link-btn {
+    background: none;
+    border: none;
+    color: var(--pine);
+    font-weight: 700;
+    cursor: pointer;
+    font-size: 0.8rem;
+    text-decoration: underline;
+    padding: 0;
+  }
+  .account-line {
+    font-size: 0.78rem;
+    color: var(--ink-soft);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
   .field label { font-size: 0.8rem; font-weight: 700; color: var(--ink-soft); }
@@ -358,13 +386,20 @@
  * Storage modes (see config.js):
  *  - Device-only demo (default): shared state lives in this
  *    browser's localStorage. Great for trying the app, but each
- *    device sees its own copy.
+ *    device sees its own copy. No sign-in.
  *  - Live sync: with supabaseUrl + supabaseAnonKey configured,
  *    meals/orders/notifications live in one shared Supabase row
  *    so every phone sees the same data. Writes use optimistic
  *    concurrency (a version column) and the app polls for
  *    changes every few seconds.
- * Per-device things (which view you're in, your camper name)
+ *
+ * Sign-in (live-sync mode only): users authenticate with their
+ * cell number via Supabase Auth SMS OTP — enter phone, get a
+ * texted code, verify. The verified phone becomes the user's
+ * identity (orders and notifications key off it), the session is
+ * kept in localStorage and refreshed automatically, and the
+ * database only accepts reads/writes from signed-in users.
+ * Per-device things (which view you're in, your display name)
  * always stay local.
  * ------------------------------------------------------------- */
 
@@ -421,14 +456,16 @@ function seedData() {
     },
   ];
 
+  // Demo orders use the camper's name as camperId; real signed-in
+  // users get their verified phone number instead.
   const orders = [
-    { id: "o1", mealId: "m1", camper: "Riley",  qty: 2, preferred: "7:30 AM", notes: "Extra crispy bacon please!", status: "pending",   confirmedSlot: null,      review: null },
-    { id: "o2", mealId: "m1", camper: "Sam",    qty: 1, preferred: "7:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
-    { id: "o3", mealId: "m1", camper: "Dana",   qty: 1, preferred: "8:00 AM", notes: "No cheese",                   status: "pending",   confirmedSlot: null,      review: null },
-    { id: "o4", mealId: "m4", camper: "Alex",   qty: 1, preferred: "8:00 AM", notes: "Salsa on the side",           status: "pending",   confirmedSlot: null,      review: null },
-    { id: "o5", mealId: "m4", camper: "Jordan", qty: 2, preferred: "8:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
-    { id: "o6", mealId: "m5", camper: "Morgan", qty: 1, preferred: "9:00 AM", notes: "Extra avocado",               status: "served",    confirmedSlot: "9:00 AM", review: null },
-    { id: "o7", mealId: "m6", camper: "Dana",   qty: 1, preferred: "8:30 AM", notes: "",                            status: "served",    confirmedSlot: "8:30 AM",
+    { id: "o1", mealId: "m1", camper: "Riley",  camperId: "Riley",  qty: 2, preferred: "7:30 AM", notes: "Extra crispy bacon please!", status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o2", mealId: "m1", camper: "Sam",    camperId: "Sam",    qty: 1, preferred: "7:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o3", mealId: "m1", camper: "Dana",   camperId: "Dana",   qty: 1, preferred: "8:00 AM", notes: "No cheese",                   status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o4", mealId: "m4", camper: "Alex",   camperId: "Alex",   qty: 1, preferred: "8:00 AM", notes: "Salsa on the side",           status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o5", mealId: "m4", camper: "Jordan", camperId: "Jordan", qty: 2, preferred: "8:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o6", mealId: "m5", camper: "Morgan", camperId: "Morgan", qty: 1, preferred: "9:00 AM", notes: "Extra avocado",               status: "served",    confirmedSlot: "9:00 AM", review: null },
+    { id: "o7", mealId: "m6", camper: "Dana",   camperId: "Dana",   qty: 1, preferred: "8:30 AM", notes: "",                            status: "served",    confirmedSlot: "8:30 AM",
       review: { rating: 5, comment: "Fluffiest pancakes I've ever had at a campsite — thank you, Chef!", when: "Yesterday 10:05 AM" } },
   ];
 
@@ -501,13 +538,104 @@ function saveLocal() {
   }
 }
 
+/* ------------- sign-in (Supabase Auth, SMS codes) --------------- */
+const AUTH_KEY = "campfire-kitchen-auth-v1";
+const AUTH_URL = REMOTE ? `${CFG.supabaseUrl.replace(/\/$/, "")}/auth/v1` : null;
+let session = loadSession();
+
+function loadSession() {
+  try {
+    const raw = localStorage.getItem(AUTH_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* fall through */ }
+  return null;
+}
+function saveSession() {
+  try {
+    if (session) localStorage.setItem(AUTH_KEY, JSON.stringify(session));
+    else localStorage.removeItem(AUTH_KEY);
+  } catch (e) { /* non-fatal */ }
+}
+
+// The signed-in user's identity: verified phone in live-sync mode,
+// the typed display name in device-only demo mode.
+function myId() {
+  return REMOTE && session ? "+" + String(session.user.phone).replace(/^\+/, "") : prefs.camperName;
+}
+function myPhoneLabel() {
+  const p = myId();
+  return p.length > 4 ? p.slice(0, -4).replace(/\d/g, "•") + p.slice(-4) : p;
+}
+
+async function authPost(path, body) {
+  const res = await fetch(`${AUTH_URL}${path}`, {
+    method: "POST",
+    headers: { apikey: CFG.supabaseAnonKey, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new Error(json.msg || json.error_description || json.message || `sign-in error (${res.status})`);
+  }
+  return json;
+}
+
+function adoptSession(s) {
+  session = {
+    access_token: s.access_token,
+    refresh_token: s.refresh_token,
+    expires_at: Math.floor(Date.now() / 1000) + (s.expires_in || 3600),
+    user: { id: s.user.id, phone: s.user.phone },
+  };
+  saveSession();
+}
+
+// "5551234567" / "555-123-4567" → "+15551234567" (assumes US when
+// no country code is given).
+function normalizePhone(raw) {
+  const p = String(raw).replace(/[^\d+]/g, "");
+  if (p.startsWith("+")) return p;
+  if (p.length === 10) return "+1" + p;
+  if (p.length === 11 && p.startsWith("1")) return "+" + p;
+  return "+" + p;
+}
+
+async function requestOtp(phone) {
+  await authPost("/otp", { phone, create_user: true });
+}
+async function verifyOtp(phone, token) {
+  adoptSession(await authPost("/verify", { phone, token, type: "sms" }));
+}
+
+// True if we hold a session that is (or could be refreshed to be) valid.
+async function ensureSession() {
+  if (!session) return false;
+  if (session.expires_at - Math.floor(Date.now() / 1000) > 60) return true;
+  try {
+    adoptSession(await authPost("/token?grant_type=refresh_token", { refresh_token: session.refresh_token }));
+    return true;
+  } catch (e) {
+    session = null;
+    saveSession();
+    return false;
+  }
+}
+
+function signOut() {
+  session = null;
+  saveSession();
+  location.reload();
+}
+
 /* ------------------ live sync (Supabase REST) ------------------ */
 const SB_URL = REMOTE ? `${CFG.supabaseUrl.replace(/\/$/, "")}/rest/v1/campfire_state` : null;
-const SB_HEADERS = REMOTE ? {
-  apikey: CFG.supabaseAnonKey,
-  Authorization: `Bearer ${CFG.supabaseAnonKey}`,
-  "Content-Type": "application/json",
-} : null;
+function sbHeaders() {
+  return {
+    apikey: CFG.supabaseAnonKey,
+    Authorization: `Bearer ${session ? session.access_token : CFG.supabaseAnonKey}`,
+    "Content-Type": "application/json",
+  };
+}
 
 function setSyncPill(mode) {
   const el = $("#syncPill");
@@ -519,7 +647,8 @@ function setSyncPill(mode) {
 }
 
 async function remoteFetchRow() {
-  const res = await fetch(`${SB_URL}?id=eq.1&select=version,data`, { headers: SB_HEADERS });
+  const res = await fetch(`${SB_URL}?id=eq.1&select=version,data`, { headers: sbHeaders() });
+  if (res.status === 401) throw new Error("unauthorized");
   if (res.status === 404) throw new Error("table-missing"); // supabase-setup.sql not run yet
   if (!res.ok) throw new Error(`fetch ${res.status}`);
   const rows = await res.json();
@@ -531,9 +660,10 @@ async function remoteFetchRow() {
 async function remotePush() {
   const res = await fetch(`${SB_URL}?id=eq.1&version=eq.${stateVersion}`, {
     method: "PATCH",
-    headers: { ...SB_HEADERS, Prefer: "return=representation" },
+    headers: { ...sbHeaders(), Prefer: "return=representation" },
     body: JSON.stringify({ version: stateVersion + 1, data: state }),
   });
+  if (res.status === 401) throw new Error("unauthorized");
   if (!res.ok) throw new Error(`push ${res.status}`);
   const rows = await res.json();
   if (rows.length === 0) return false; // version conflict
@@ -548,7 +678,7 @@ async function remoteInit() {
     // one POST fails and we just re-fetch.
     await fetch(SB_URL, {
       method: "POST",
-      headers: { ...SB_HEADERS, Prefer: "resolution=ignore-duplicates" },
+      headers: { ...sbHeaders(), Prefer: "resolution=ignore-duplicates" },
       body: JSON.stringify({ id: 1, version: 1, data: seedData() }),
     });
     row = await remoteFetchRow();
@@ -569,16 +699,27 @@ async function remoteRefresh() {
 }
 
 const POLL_MS = 4000;
+let pollTimer = null;
 function startPolling() {
-  setInterval(async () => {
+  if (pollTimer) return;
+  pollTimer = setInterval(async () => {
     try {
+      await ensureSession();
       const changed = await remoteRefresh();
       setSyncPill("ok");
       if (changed) render();
     } catch (e) {
+      if (e.message === "unauthorized") { handleAuthLoss(); return; }
       setSyncPill("offline");
     }
   }, POLL_MS);
+}
+
+function handleAuthLoss() {
+  session = null;
+  saveSession();
+  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  renderLogin("Your session expired — sign in again to get back to the kitchen.");
 }
 
 /* -------- commit: the single write path for shared state -------- */
@@ -589,6 +730,7 @@ async function commit(mutator) {
     return true;
   }
   try {
+    if (!(await ensureSession())) { handleAuthLoss(); return false; }
     for (let attempt = 0; attempt < 5; attempt++) {
       mutator(state);
       if (await remotePush()) {
@@ -601,6 +743,7 @@ async function commit(mutator) {
     }
     toast("⚠️ The camp kitchen is busy — change not saved, please retry");
   } catch (e) {
+    if (e.message === "unauthorized") { handleAuthLoss(); return false; }
     setSyncPill("offline");
     toast("⚠️ Can't reach the camp kitchen server — check your connection");
   }
@@ -642,7 +785,7 @@ function notify(to, text) {
   state.notifications.unshift({ id: uid("n"), to, unread: true, text, when: nowLabel() });
 }
 function unreadCount() {
-  const me = prefs.role === "chef" ? "chef" : prefs.camperName;
+  const me = prefs.role === "chef" ? "chef" : myId();
   return state.notifications.filter((n) => n.unread && (n.to === me || n.to === "all")).length;
 }
 
@@ -661,16 +804,18 @@ function render() {
 
 /* ========================= CAMPER VIEW ========================= */
 function camperView() {
-  const me = prefs.camperName;
-  const myOrders = state.orders.filter((o) => o.camper === me);
+  const me = myId();
+  const myOrders = state.orders.filter((o) => (o.camperId || o.camper) === me);
   const myNotifs = state.notifications.filter((n) => n.to === me || n.to === "all");
   const avail = state.meals.filter((m) => m.available);
 
   return `
     <div class="name-bar">
       <span class="label">🎒 Ordering as:</span>
-      <input type="text" id="camperName" value="${esc(me)}" placeholder="Your name">
-      <span class="hint" style="margin:0">Change the name to order as a different camper.</span>
+      <input type="text" id="camperName" value="${esc(prefs.camperName)}" placeholder="Your name">
+      ${REMOTE && session
+        ? `<span class="account-line">📱 ${esc(myPhoneLabel())} <button class="link-btn" onclick="signOut()">Sign out</button></span>`
+        : `<span class="hint" style="margin:0">Change the name to order as a different camper.</span>`}
     </div>
 
     <div class="section-title">☀️ This morning's menu</div>
@@ -820,6 +965,9 @@ function chefView() {
 
     <div class="footer-tools">
       <button class="btn ghost small" onclick="resetDemo()">↺ Reset demo data</button>
+      ${REMOTE && session
+        ? `<div class="account-line" style="justify-content:center;margin-top:10px">📱 ${esc(myPhoneLabel())} <button class="link-btn" onclick="signOut()">Sign out</button></div>`
+        : ""}
     </div>
   `;
 }
@@ -887,13 +1035,23 @@ function notifList(list) {
  * shared state after a sync conflict, so they always look items up
  * by id inside the mutator. */
 function setRole(role) {
-  if (role === "chef" && CFG.chefPin && sessionStorage.getItem("campfire-chef-ok") !== "1") {
-    const pin = prompt("Chef PIN:");
-    if (pin !== String(CFG.chefPin)) {
-      if (pin !== null) toast("Wrong PIN — ask the chef!");
-      return;
+  if (!state) return; // still on the sign-in screen
+  if (role === "chef") {
+    const chefPhones = (CFG.chefPhones || []).map(normalizePhone);
+    if (REMOTE && session && chefPhones.length) {
+      // Kitchen is locked to specific verified phone numbers.
+      if (!chefPhones.includes(myId())) {
+        toast("Only the chef's phone can open the kitchen 👩‍🍳");
+        return;
+      }
+    } else if (CFG.chefPin && sessionStorage.getItem("campfire-chef-ok") !== "1") {
+      const pin = prompt("Chef PIN:");
+      if (pin !== String(CFG.chefPin)) {
+        if (pin !== null) toast("Wrong PIN — ask the chef!");
+        return;
+      }
+      sessionStorage.setItem("campfire-chef-ok", "1");
     }
-    sessionStorage.setItem("campfire-chef-ok", "1");
   }
   prefs.role = role;
   render();
@@ -934,7 +1092,7 @@ function confirmMealTime(mealId) {
     for (const o of affected) {
       o.status = "confirmed";
       o.confirmedSlot = slot;
-      notify(o.camper, `👨‍🍳 Chef confirmed: ${meal.name} will be ready for pickup at ${slot} at the camp kitchen.`);
+      notify(o.camperId || o.camper, `👨‍🍳 Chef confirmed: ${meal.name} will be ready for pickup at ${slot} at the camp kitchen.`);
     }
   }).then((ok) => {
     if (ok) toast(`📣 ${count} camper${count !== 1 ? "s" : ""} notified — ${mealName} at ${slot}`);
@@ -951,7 +1109,7 @@ function markServed(mealId) {
     count = affected.length;
     for (const o of affected) {
       o.status = "served";
-      notify(o.camper, `🍽️ Hope you enjoyed the ${meal.name}! Tap “Rate & thank the chef” on your order to rate the meal and send a compliment.`);
+      notify(o.camperId || o.camper, `🍽️ Hope you enjoyed the ${meal.name}! Tap “Rate & thank the chef” on your order to rate the meal and send a compliment.`);
     }
   }).then((ok) => {
     if (ok) toast(`🍽️ ${mealName} served — ${count} camper${count !== 1 ? "s" : ""} asked to rate & thank the chef`);
@@ -1014,7 +1172,8 @@ function submitReview(orderId) {
 }
 
 function markNotifsRead() {
-  const me = prefs.role === "chef" ? "chef" : prefs.camperName;
+  if (!state) return; // still on the sign-in screen
+  const me = prefs.role === "chef" ? "chef" : myId();
   commit((s) => {
     for (const n of s.notifications) {
       if (n.to === me || n.to === "all") n.unread = false;
@@ -1078,11 +1237,12 @@ function placeOrder(mealId) {
   const qty = Math.max(1, parseInt($("#dlgQty").value, 10) || 1);
   const notes = $("#dlgNotes").value.trim();
   const slot = dialogSlot;
+  const camperId = myId();
   commit((s) => {
     const meal = s.meals.find((m) => m.id === mealId);
     if (!meal) return;
     s.orders.push({
-      id: uid("o"), mealId, camper: name, qty,
+      id: uid("o"), mealId, camper: name, camperId, qty,
       preferred: slot, notes, status: "pending", confirmedSlot: null, review: null,
     });
     notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot}).${notes ? " Note: " + notes : ""}`);
@@ -1223,19 +1383,104 @@ $("#app").addEventListener("change", (e) => {
   if (e.target.id === "camperName") render();
 });
 
-/* --------------------------- startup --------------------------- */
-async function init() {
-  setSyncPill("ok");
-  if (!REMOTE) {
-    state = loadLocal();
-    render();
+/* -------------------- sign-in screens -------------------------- */
+let loginPhone = null;
+
+function renderLogin(msg) {
+  $("#app").innerHTML = `
+    <div class="login-wrap">
+      <div class="card">
+        <div class="login-emoji">🏕️📱</div>
+        <h2>Sign in to Campfire Kitchen</h2>
+        <p class="hint">${msg ? esc(msg) : "Enter your cell number and we'll text you a verification code."}</p>
+        <div class="field">
+          <label>Cell phone number</label>
+          <input type="tel" id="loginPhone" placeholder="e.g. 555-123-4567" autocomplete="tel" inputmode="tel">
+        </div>
+        <button class="btn primary" id="sendCodeBtn">Text me a code</button>
+      </div>
+    </div>`;
+  const send = () => onSendCode();
+  $("#sendCodeBtn").onclick = send;
+  $("#loginPhone").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  $("#loginPhone").focus();
+}
+
+async function onSendCode() {
+  const phone = normalizePhone($("#loginPhone").value);
+  if (phone.replace(/\D/g, "").length < 10) {
+    toast("That doesn't look like a full phone number");
     return;
   }
+  const btn = $("#sendCodeBtn");
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    await requestOtp(phone);
+    loginPhone = phone;
+    renderCodeEntry();
+  } catch (e) {
+    toast("⚠️ " + e.message);
+    btn.disabled = false;
+    btn.textContent = "Text me a code";
+  }
+}
+
+function renderCodeEntry() {
+  $("#app").innerHTML = `
+    <div class="login-wrap">
+      <div class="card">
+        <div class="login-emoji">💬</div>
+        <h2>Check your texts</h2>
+        <p class="hint">We sent a verification code to <strong>${esc(loginPhone)}</strong>.</p>
+        <div class="field">
+          <label>Verification code</label>
+          <input type="text" id="loginCode" class="code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="••••••">
+        </div>
+        <button class="btn primary" id="verifyBtn">Verify &amp; sign in</button>
+        <div class="row" style="justify-content:center;gap:16px">
+          <button class="link-btn" id="resendBtn">Resend code</button>
+          <button class="link-btn" id="changePhoneBtn">Use a different number</button>
+        </div>
+      </div>
+    </div>`;
+  const verify = () => onVerifyCode();
+  $("#verifyBtn").onclick = verify;
+  $("#loginCode").addEventListener("keydown", (e) => { if (e.key === "Enter") verify(); });
+  $("#resendBtn").onclick = async () => {
+    try { await requestOtp(loginPhone); toast("New code sent 📲"); }
+    catch (e) { toast("⚠️ " + e.message); }
+  };
+  $("#changePhoneBtn").onclick = () => renderLogin();
+  $("#loginCode").focus();
+}
+
+async function onVerifyCode() {
+  const code = $("#loginCode").value.replace(/\D/g, "");
+  if (code.length < 4) { toast("Enter the code from the text message"); return; }
+  const btn = $("#verifyBtn");
+  btn.disabled = true;
+  btn.textContent = "Checking…";
+  try {
+    await verifyOtp(loginPhone, code);
+    toast("You're in! 🏕️");
+    await startApp();
+  } catch (e) {
+    toast("⚠️ " + e.message);
+    btn.disabled = false;
+    btn.textContent = "Verify & sign in";
+  }
+}
+
+/* --------------------------- startup --------------------------- */
+async function startApp() {
   $("#app").innerHTML = `<div class="empty">⛺ Connecting to the camp kitchen…</div>`;
   try {
     await remoteInit();
+    setSyncPill("ok");
     render();
   } catch (e) {
+    if (e.message === "unauthorized") { handleAuthLoss(); return; }
     setSyncPill("offline");
     $("#app").innerHTML = e.message === "table-missing"
       ? `<div class="empty">🛠️ The shared database isn't set up yet.<br>
@@ -1247,6 +1492,20 @@ async function init() {
     return;
   }
   startPolling();
+}
+
+async function init() {
+  setSyncPill("ok");
+  if (!REMOTE) {
+    state = loadLocal();
+    render();
+    return;
+  }
+  if (!(await ensureSession())) {
+    renderLogin();
+    return;
+  }
+  await startApp();
 }
 
 init();

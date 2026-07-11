@@ -50,11 +50,48 @@ and pushes writes with optimistic concurrency (conflicting writes are retried
 against the latest state, so two campers ordering at once both get through).
 Per-device things — which view you're in, your camper name — stay local.
 
+## Phone sign-in (texted verification codes)
+
+In live-sync mode everyone — chef and campers — signs in with their cell
+number: enter the number, receive a texted verification code, type it in.
+Powered by Supabase Auth SMS OTP; no extra backend.
+
+- The **verified phone number is the user's identity**: orders and
+  notifications are keyed to it, so two campers named "Sam" can't collide
+  or read each other's notifications. The name in the "Ordering as" bar is
+  just the display name.
+- Sessions persist on the device and refresh automatically; there's a
+  **Sign out** link next to the (masked) phone number.
+- The database policies (see `supabase-setup.sql`) only allow signed-in
+  users to read/write — the public anon key alone is no longer enough.
+- **`chefPhones`** in `config.js`: list the chef's number(s) there and only
+  those signed-in phones can open the Chef view (no PIN prompt needed).
+  If the list is empty, the `chefPin` gate applies instead.
+
+### One-time Supabase setup for SMS sign-in
+
+1. Run (or re-run) `supabase-setup.sql` in the SQL Editor — it now grants
+   access to signed-in users only.
+2. In the dashboard under **Authentication → Sign In / Providers**, enable
+   the **Phone** provider.
+3. Supabase doesn't send SMS itself — connect a provider under the Phone
+   settings (Twilio is the usual choice: create a free trial account at
+   twilio.com, buy/claim a number, then paste the Account SID, Auth Token,
+   and Messaging Service/From number into Supabase).
+4. **To try it before setting up Twilio:** in the Phone provider settings,
+   add a **Test OTP** — a phone number with a fixed code (e.g.
+   `+15555550100` → `123456`). Signing in with that number then works
+   without any SMS being sent.
+
+Note: Supabase's shortest code length is **6 digits** (configurable in the
+Phone settings; 4 is below its minimum).
+
 **Pilot-grade caveats, on purpose:**
-- The anon key in `config.js` is public. Anyone who finds the URL can read
-  and write the shared data. Fine for a campground pilot; not for real money.
-- The `chefPin` is a courtesy gate to keep campers out of the Chef view, not
-  real security.
+- Reads/writes now require a phone-verified sign-in, but any verified user
+  can see all orders and (by design of the single shared row) technically
+  write anything. Fine for a campground pilot; not for real money.
+- SMS sign-in proves possession of a phone number — good enough to know
+  you're dealing with real people, not strong security.
 - Notifications appear when the app polls (in-app), they are not push
   notifications to a closed phone.
 - In live sync the **Reset demo data** button only appears in the Chef view,

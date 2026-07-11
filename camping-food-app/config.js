@@ -22,5 +22,12 @@ window.CAMPFIRE_CONFIG = {
 
   // Optional: require this PIN to open the Chef view, so campers
   // can't wander into the kitchen controls. Empty = no PIN.
+  // (Ignored when chefPhones below is non-empty and sign-in is on.)
   chefPin: "0711",
+
+  // Optional: lock the Chef view to specific verified phone numbers
+  // (E.164 format, e.g. "+15551234567"). When set, only these
+  // signed-in phones can open the kitchen — stronger than the PIN.
+  // These numbers are visible to anyone reading this file.
+  chefPhones: [],
 };

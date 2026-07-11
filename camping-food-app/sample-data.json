@@ -69,6 +69,7 @@
   ],
   "notes": {
     "orderStatuses": ["pending", "confirmed", "served"],
+    "camperId": "Orders also carry a `camperId` — the camper's verified phone number (E.164) when SMS sign-in is on, or the display name in device-only demo mode. Notifications are addressed to it.",
     "mealPhoto": "Each meal may also carry a `photo` field (data-URL JPEG, downscaled to max 640px wide) uploaded by the chef; omitted here to keep the JSON readable.",
     "review": "Set on an order after the camper rates a served meal: { rating: 1-5, comment: string, when: string }. Submitting a review notifies the chef."
   }
