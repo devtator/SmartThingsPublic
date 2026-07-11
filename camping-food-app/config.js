@@ -29,5 +29,5 @@ window.CAMPFIRE_CONFIG = {
   // (E.164 format, e.g. "+15551234567"). When set, only these
   // signed-in phones can open the kitchen — stronger than the PIN.
   // These numbers are visible to anyone reading this file.
-  chefPhones: [],
+  chefPhones: ["+16175298470"],
 };
