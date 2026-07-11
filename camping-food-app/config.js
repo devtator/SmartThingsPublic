@@ -27,5 +27,5 @@ window.CAMPFIRE_CONFIG = {
   // SQL hasn't been applied (chefPhones) or in device-only demo
   // mode (chefPin).
   chefPin: "0711",
-  chefPhones: ["+16175298470"],
+  chefPhones: ["+16175298470", "brylong@gmail.com"],
 };

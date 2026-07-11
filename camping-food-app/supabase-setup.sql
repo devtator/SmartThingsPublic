@@ -35,7 +35,9 @@ alter table public.campfire_chefs enable row level security;
 -- (No policies on purpose: only the security-definer functions below
 -- read it, so the chef list is not directly visible to clients.)
 
-insert into public.campfire_chefs (phone) values ('+16175298470')
+insert into public.campfire_chefs (phone) values
+  ('+16175298470'),
+  ('brylong@gmail.com')
 on conflict do nothing;
 
 -- ------------------------------------------------------------------

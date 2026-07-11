@@ -1395,8 +1395,11 @@ function setRole(role) {
         return;
       }
     } else if (REMOTE && session && (CFG.chefPhones || []).length) {
-      // Legacy fallback (pre-v3 database): client-side phone list.
-      if (!(CFG.chefPhones || []).map(normalizePhone).includes(myId())) {
+      // Legacy fallback (pre-v4 database): client-side list of chef
+      // phones and/or emails.
+      const chefIds = (CFG.chefPhones || []).map((c) =>
+        c.includes("@") ? c.trim().toLowerCase() : normalizePhone(c));
+      if (!myIds().some((id) => chefIds.includes(id))) {
         toast("Only the chef's phone can open the kitchen 👩‍🍳");
         return;
       }
