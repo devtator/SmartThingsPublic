@@ -1,4 +1,7 @@
--- Campfire Kitchen database setup (v3).
+-- Campfire Kitchen database setup (v4).
+-- v4: users may sign in with a phone number OR an email (or link
+-- both to one account) — chef checks and order ownership accept
+-- either identity.
 -- Run this in your Supabase project's SQL editor
 -- (Dashboard → SQL Editor → New query → paste → Run).
 -- Safe to re-run: it drops and recreates its own policies/functions.
@@ -51,22 +54,32 @@ create policy "campfire auth select" on public.campfire_state
 
 -- ------------------------------------------------------------------
 -- Helpers
-create or replace function public.jwt_phone()
-returns text
+-- Every identity attached to the signed-in user: their verified
+-- phone (as +E.164) and/or their email (lowercased). A user needs
+-- only one, but may link both.
+create or replace function public.jwt_ids()
+returns text[]
 language sql stable
 as $$
-  select case
-    when coalesce(auth.jwt()->>'phone', '') = '' then null
-    else '+' || ltrim(auth.jwt()->>'phone', '+')
-  end;
+  select array_remove(array[
+    case
+      when coalesce(auth.jwt()->>'phone', '') = '' then null
+      else '+' || ltrim(auth.jwt()->>'phone', '+')
+    end,
+    nullif(lower(coalesce(auth.jwt()->>'email', '')), '')
+  ], null);
 $$;
 
+drop function if exists public.jwt_phone();
+
+-- The campfire_chefs.phone column holds either a phone (+E.164) or
+-- a lowercase email — whichever identity the chef signs in with.
 create or replace function public.campfire_is_chef()
 returns boolean
 language sql stable security definer set search_path = public
 as $$
   select exists (
-    select 1 from campfire_chefs c where c.phone = public.jwt_phone()
+    select 1 from campfire_chefs c where c.phone = any (public.jwt_ids())
   );
 $$;
 
@@ -118,8 +131,8 @@ returns bigint
 language plpgsql security definer set search_path = public
 as $$
 declare
-  v_phone text := public.jwt_phone();
-  v_chef  boolean := public.campfire_is_chef();
+  v_ids  text[]  := public.jwt_ids();
+  v_chef boolean := public.campfire_is_chef();
   v_old   campfire_state%rowtype;
 begin
   if auth.role() is distinct from 'authenticated' then
@@ -160,8 +173,8 @@ begin
         where o.v is distinct from n.v
       )
       select 1 from changed
-      where (ov is not null and coalesce(ov->>'camperId', '') is distinct from v_phone)
-         or (nv is not null and coalesce(nv->>'camperId', '') is distinct from v_phone)
+      where (ov is not null and not coalesce(ov->>'camperId', '') = any (v_ids))
+         or (nv is not null and not coalesce(nv->>'camperId', '') = any (v_ids))
     ) then
       raise exception 'you can only change your own orders';
     end if;

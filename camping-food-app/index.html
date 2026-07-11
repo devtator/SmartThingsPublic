@@ -207,6 +207,26 @@
     letter-spacing: 8px;
     font-weight: 700;
   }
+  .method-toggle {
+    display: flex;
+    align-self: center;
+    background: var(--cream);
+    border: 1.5px solid var(--line);
+    border-radius: 999px;
+    padding: 4px;
+    gap: 4px;
+  }
+  .method-toggle button {
+    border: none;
+    background: transparent;
+    color: var(--ink-soft);
+    padding: 7px 18px;
+    border-radius: 999px;
+    font-size: 0.88rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .method-toggle button.active { background: var(--sun); color: var(--ink); }
   .link-btn {
     background: none;
     border: none;
@@ -395,6 +415,7 @@
 <dialog id="rateDialog"></dialog>
 <dialog id="siteDialog"></dialog>
 <dialog id="inviteDialog"></dialog>
+<dialog id="accountDialog"></dialog>
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
@@ -600,7 +621,7 @@ function saveLocal() {
   }
 }
 
-/* ------------- sign-in (Supabase Auth, SMS codes) --------------- */
+/* --- sign-in (Supabase Auth: SMS codes or email magic links) ----- */
 const AUTH_KEY = "campfire-kitchen-auth-v1";
 const AUTH_URL = REMOTE ? `${CFG.supabaseUrl.replace(/\/$/, "")}/auth/v1` : null;
 let session = loadSession();
@@ -619,14 +640,22 @@ function saveSession() {
   } catch (e) { /* non-fatal */ }
 }
 
-// The signed-in user's identity: verified phone in live-sync mode,
-// the typed display name in device-only demo mode.
-function myId() {
-  return REMOTE && session ? "+" + String(session.user.phone).replace(/^\+/, "") : prefs.camperName;
+// The signed-in user's identities: verified phone and/or email in
+// live-sync mode (a user needs only one, may link both), or the
+// typed display name in device-only demo mode. Orders and
+// notifications match against ANY of them.
+function myIds() {
+  if (!REMOTE || !session) return [prefs.camperName];
+  const ids = [];
+  if (session.user.phone) ids.push("+" + String(session.user.phone).replace(/^\+/, ""));
+  if (session.user.email) ids.push(String(session.user.email).toLowerCase());
+  return ids;
 }
-function myPhoneLabel() {
-  const p = myId();
-  return p.length > 4 ? p.slice(0, -4).replace(/\d/g, "•") + p.slice(-4) : p;
+function myId() { return myIds()[0] || ""; }
+function myIdLabel() {
+  const id = myId();
+  if (id.startsWith("+") && id.length > 4) return id.slice(0, -4).replace(/\d/g, "•") + id.slice(-4);
+  return id;
 }
 
 async function authPost(path, body) {
@@ -647,9 +676,37 @@ function adoptSession(s) {
     access_token: s.access_token,
     refresh_token: s.refresh_token,
     expires_at: Math.floor(Date.now() / 1000) + (s.expires_in || 3600),
-    user: { id: s.user.id, phone: s.user.phone },
+    user: { id: s.user.id, phone: s.user.phone || null, email: s.user.email || null },
   };
   saveSession();
+}
+
+async function fetchAuthUser(accessToken) {
+  const res = await fetch(`${AUTH_URL}/user`, {
+    headers: { apikey: CFG.supabaseAnonKey, Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error(`user ${res.status}`);
+  return res.json();
+}
+
+// Magic-link return trip: Supabase redirects back with the session
+// in the URL hash. Consume (and scrub) it if present.
+function consumeAuthHash() {
+  if (!location.hash || location.hash.length < 2) return null;
+  const p = new URLSearchParams(location.hash.slice(1));
+  const scrub = () => history.replaceState(null, "", location.pathname + location.search);
+  if (p.get("error_description")) {
+    scrub();
+    return { error: p.get("error_description").replace(/\+/g, " ") };
+  }
+  if (!p.get("access_token")) return null;
+  const tokens = {
+    access_token: p.get("access_token"),
+    refresh_token: p.get("refresh_token"),
+    expires_in: parseInt(p.get("expires_in"), 10) || 3600,
+  };
+  scrub();
+  return { tokens };
 }
 
 // "5551234567" / "555-123-4567" → "+15551234567" (assumes US when
@@ -667,6 +724,34 @@ async function requestOtp(phone) {
 }
 async function verifyOtp(phone, token) {
   adoptSession(await authPost("/verify", { phone, token, type: "sms" }));
+}
+async function requestMagicLink(email) {
+  const redirect = encodeURIComponent(location.href.split(/[?#]/)[0]);
+  await authPost(`/otp?redirect_to=${redirect}`, { email, create_user: true });
+}
+
+// Link the missing identifier (email or phone) to the signed-in account.
+async function authUpdateUser(fields) {
+  const res = await fetch(`${AUTH_URL}/user`, {
+    method: "PUT",
+    headers: {
+      apikey: CFG.supabaseAnonKey,
+      Authorization: `Bearer ${session.access_token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(fields),
+  });
+  const j = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(j.msg || j.error_description || j.message || `account error (${res.status})`);
+  return j;
+}
+
+async function refreshSessionUser() {
+  try {
+    const u = await fetchAuthUser(session.access_token);
+    session.user = { id: u.id, phone: u.phone || null, email: u.email || null };
+    saveSession();
+  } catch (e) { /* non-fatal */ }
 }
 
 // True if we hold a session that is (or could be refreshed to be) valid.
@@ -687,6 +772,76 @@ function signOut() {
   session = null;
   saveSession();
   location.reload();
+}
+
+/* ------------------- account (link email/phone) ------------------ */
+function openAccountDialog() {
+  if (!session) return;
+  const u = session.user;
+  const dlg = $("#accountDialog");
+  dlg.innerHTML = `
+    <h3>⚙️ Your account</h3>
+    <div class="sub">You only need one way to sign in, but you can link both a phone and an email to the same account.</div>
+    <div class="field">
+      <label>📱 Phone</label>
+      ${u.phone
+        ? `<div class="invite-link-box">+${esc(String(u.phone).replace(/^\+/, ""))}</div>`
+        : `<div class="row">
+             <input type="tel" id="acctPhone" placeholder="e.g. 555-123-4567" style="flex:1;min-width:150px">
+             <button class="btn green small" id="acctAddPhone">Link phone</button>
+           </div>
+           <div class="row" id="acctPhoneVerifyRow" hidden style="margin-top:8px">
+             <input type="text" id="acctPhoneCode" class="code-input" placeholder="••••••" maxlength="10" style="flex:1;min-width:120px">
+             <button class="btn green small" id="acctVerifyPhone">Verify code</button>
+           </div>`}
+    </div>
+    <div class="field">
+      <label>✉️ Email</label>
+      ${u.email
+        ? `<div class="invite-link-box">${esc(u.email)}</div>`
+        : `<div class="row">
+             <input type="email" id="acctEmail" placeholder="you@example.com" style="flex:1;min-width:150px">
+             <button class="btn green small" id="acctAddEmail">Link email</button>
+           </div>`}
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn primary" onclick="document.getElementById('accountDialog').close()">Done</button>
+    </div>`;
+  if (!u.phone) {
+    let pendingPhone = null;
+    $("#acctAddPhone").onclick = async () => {
+      const phone = normalizePhone($("#acctPhone").value);
+      if (phone.replace(/\D/g, "").length < 10) { toast("That doesn't look like a full phone number"); return; }
+      try {
+        await authUpdateUser({ phone });
+        pendingPhone = phone;
+        $("#acctPhoneVerifyRow").hidden = false;
+        toast(`📲 We texted a code to ${phone} — enter it to finish linking`);
+      } catch (e) { toast("⚠️ " + e.message); }
+    };
+    $("#acctVerifyPhone").onclick = async () => {
+      const code = $("#acctPhoneCode").value.replace(/\D/g, "");
+      if (!pendingPhone || code.length < 4) { toast("Enter the code from the text"); return; }
+      try {
+        await authPost("/verify", { phone: pendingPhone, token: code, type: "phone_change" });
+        await refreshSessionUser();
+        toast("📱 Phone linked!");
+        openAccountDialog();
+        render();
+      } catch (e) { toast("⚠️ " + e.message); }
+    };
+  }
+  if (!u.email) {
+    $("#acctAddEmail").onclick = async () => {
+      const email = $("#acctEmail").value.trim().toLowerCase();
+      if (!isEmail(email)) { toast("That doesn't look like an email address"); return; }
+      try {
+        await authUpdateUser({ email });
+        toast(`📬 Confirmation link sent to ${email} — open it to finish linking`);
+      } catch (e) { toast("⚠️ " + e.message); }
+    };
+  }
+  dlg.showModal();
 }
 
 /* ------------------ live sync (Supabase REST) ------------------ */
@@ -965,8 +1120,8 @@ function notify(to, text) {
   state.notifications.unshift({ id: uid("n"), to, unread: true, text, when: nowLabel() });
 }
 function unreadCount() {
-  const me = prefs.role === "chef" ? "chef" : myId();
-  return state.notifications.filter((n) => n.unread && (n.to === me || n.to === "all")).length;
+  const mine = prefs.role === "chef" ? ["chef"] : myIds();
+  return state.notifications.filter((n) => n.unread && (mine.includes(n.to) || n.to === "all")).length;
 }
 
 /* --------------------------- render ---------------------------- */
@@ -995,9 +1150,9 @@ function siteBar() {
 
 /* ========================= CAMPER VIEW ========================= */
 function camperView() {
-  const me = myId();
-  const myOrders = state.orders.filter((o) => (o.camperId || o.camper) === me);
-  const myNotifs = state.notifications.filter((n) => n.to === me || n.to === "all");
+  const mine = myIds();
+  const myOrders = state.orders.filter((o) => mine.includes(o.camperId || o.camper));
+  const myNotifs = state.notifications.filter((n) => mine.includes(n.to) || n.to === "all");
   const avail = state.meals.filter((m) => m.available);
 
   return `
@@ -1005,7 +1160,9 @@ function camperView() {
       <span class="label">🎒 Ordering as:</span>
       <input type="text" id="camperName" value="${esc(prefs.camperName)}" placeholder="Your name">
       ${REMOTE && session
-        ? `<span class="account-line">📱 ${esc(myPhoneLabel())} <button class="link-btn" onclick="signOut()">Sign out</button></span>`
+        ? `<span class="account-line">${myId().startsWith("+") ? "📱" : "✉️"} ${esc(myIdLabel())}
+             <button class="link-btn" onclick="openAccountDialog()">Account</button>
+             <button class="link-btn" onclick="signOut()">Sign out</button></span>`
         : `<span class="hint" style="margin:0">Change the name to order as a different camper.</span>`}
     </div>
 
@@ -1157,7 +1314,9 @@ function chefView() {
     <div class="footer-tools">
       <button class="btn ghost small" onclick="resetDemo()">${prefs.siteId === 1 ? "↺ Reset demo data" : "🧹 Clear this camp site"}</button>
       ${REMOTE && session
-        ? `<div class="account-line" style="justify-content:center;margin-top:10px">📱 ${esc(myPhoneLabel())} <button class="link-btn" onclick="signOut()">Sign out</button></div>`
+        ? `<div class="account-line" style="justify-content:center;margin-top:10px">${myId().startsWith("+") ? "📱" : "✉️"} ${esc(myIdLabel())}
+             <button class="link-btn" onclick="openAccountDialog()">Account</button>
+             <button class="link-btn" onclick="signOut()">Sign out</button></div>`
         : ""}
     </div>
   `;
@@ -1370,10 +1529,10 @@ function submitReview(orderId) {
 
 function markNotifsRead() {
   if (!state) return; // still on the sign-in screen
-  const me = prefs.role === "chef" ? "chef" : myId();
+  const mine = prefs.role === "chef" ? ["chef"] : myIds();
   commit((s) => {
     for (const n of s.notifications) {
-      if (n.to === me || n.to === "all") n.unread = false;
+      if (mine.includes(n.to) || n.to === "all") n.unread = false;
     }
   }).then(() => {
     const target = $("#notifSection");
@@ -1598,7 +1757,10 @@ function renderSitePicker() {
           <span class="s-emoji">${s.emoji || "⛺"}</span>
           <div>
             <div class="s-name">${esc(s.name)}</div>
-            <div class="s-meta">${s.id === 1 ? "Sample data to play with" : `${(s.phones || []).length} camper${(s.phones || []).length === 1 ? "" : "s"} invited`}</div>
+            <div class="s-meta">${s.id === 1 ? "Sample data to play with" : (() => {
+              const n = (s.phones || []).length + (s.emails || []).length;
+              return `${n} camper${n === 1 ? "" : "s"} invited`;
+            })()}</div>
           </div>
           <span class="spacer"></span>
           ${s.id === prefs.siteId
@@ -1642,8 +1804,8 @@ function openSiteDialog() {
     <div class="field"><label>Camp site name</label><input type="text" id="sName" placeholder="e.g. Lake View Loop, Site 14"></div>
     <div class="field"><label>Emoji</label><input type="text" id="sEmoji" value="🏞️" maxlength="4"></div>
     <div class="field">
-      <label>Camper cell numbers (one per line or comma-separated)</label>
-      <textarea id="sPhones" rows="4" placeholder="555-123-4567&#10;555-987-6543"></textarea>
+      <label>Camper cell numbers and/or emails (one per line or comma-separated)</label>
+      <textarea id="sPhones" rows="4" placeholder="555-123-4567&#10;sam@example.com&#10;555-987-6543"></textarea>
     </div>
     <div class="row" style="justify-content:flex-end">
       <button class="btn ghost" onclick="document.getElementById('siteDialog').close()">Cancel</button>
@@ -1656,21 +1818,22 @@ async function createSite() {
   const name = $("#sName").value.trim();
   if (!name) { toast("Give the camp site a name"); return; }
   const emoji = $("#sEmoji").value.trim() || "⛺";
-  const phones = $("#sPhones").value.split(/[\n,;]+/)
-    .map((t) => t.trim()).filter(Boolean).map(normalizePhone)
+  const tokens = $("#sPhones").value.split(/[\n,;]+/).map((t) => t.trim()).filter(Boolean);
+  const emails = tokens.filter(isEmail).map((e) => e.toLowerCase());
+  const phones = tokens.filter((t) => !isEmail(t)).map(normalizePhone)
     .filter((p) => p.replace(/\D/g, "").length >= 10);
   const creator = myId();
   let newId = null;
   const ok = await commitDirectory((d) => {
     newId = d.nextSiteId++;
-    d.sites.push({ id: newId, name, emoji, phones, createdBy: creator });
+    d.sites.push({ id: newId, name, emoji, phones, emails, createdBy: creator });
   });
   $("#siteDialog").close();
   if (!ok || newId === null) return;
   try { if (REMOTE) await insertRow(newId, emptySiteData()); } catch (e) { /* switchSite retries */ }
   await switchSite(newId);
   toast(`${emoji} ${name} is ready — set up the menu and send the invites!`);
-  if (phones.length) openInviteDialog(newId);
+  if (phones.length || emails.length) openInviteDialog(newId);
 }
 
 function inviteLink(siteId) {
@@ -1686,25 +1849,29 @@ function openInviteDialog(siteId) {
   if (!site) return;
   const link = inviteLink(siteId);
   const msg = inviteMessage(site);
+  const subject = `🏕️ Welcome to ${site.name}'s camp kitchen`;
   const phones = site.phones || [];
+  const emails = site.emails || [];
   const dlg = $("#inviteDialog");
   dlg.innerHTML = `
     <h3>💬 Invite campers to ${esc(site.name)}</h3>
-    <div class="sub">Send invites automatically from the server, or tap a button to open your Messages app with the invite pre-filled. Campers sign in with their number and land right in this camp site.</div>
+    <div class="sub">Send the welcome note automatically from the server, or tap a button to open your Messages/Mail app with it pre-filled. Campers sign in with that number or email and land right in this camp site.</div>
     <div class="field">
       <label>Invite link</label>
       <div class="invite-link-box" id="inviteLinkBox">${esc(link)}</div>
     </div>
     <div class="row" style="margin-bottom:12px">
-      ${phones.length ? `<button class="btn primary small" id="autoSendBtn" onclick="sendInvitesAuto(${site.id})">🚀 Text everyone automatically</button>` : ""}
+      ${(phones.length || emails.length) ? `<button class="btn primary small" id="autoSendBtn" onclick="sendInvitesAuto(${site.id})">🚀 Send to everyone automatically</button>` : ""}
       <button class="btn ghost small" onclick="copyInviteLink('${siteId}')">📋 Copy link</button>
-      ${phones.length > 1 ? `<a class="btn green small" style="text-decoration:none" href="sms:${phones.join(",")}?&body=${encodeURIComponent(msg)}">💬 Text everyone</a>` : ""}
+      ${phones.length > 1 ? `<a class="btn green small" style="text-decoration:none" href="sms:${phones.join(",")}?&body=${encodeURIComponent(msg)}">💬 Text all phones</a>` : ""}
+      ${emails.length ? `<a class="btn green small" style="text-decoration:none" href="mailto:${emails.join(",")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(msg)}">✉️ Email all</a>` : ""}
     </div>
-    ${phones.length ? `<div class="field"><label>Text one at a time</label>
+    ${(phones.length || emails.length) ? `<div class="field"><label>One at a time</label>
       <div class="slot-picker">
         ${phones.map((p) => `<a class="btn ghost small" style="text-decoration:none" href="sms:${p}?&body=${encodeURIComponent(msg)}">💬 ${esc(p)}</a>`).join("")}
+        ${emails.map((e) => `<a class="btn ghost small" style="text-decoration:none" href="mailto:${e}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(msg)}">✉️ ${esc(e)}</a>`).join("")}
       </div></div>`
-    : `<p class="hint">No camper numbers on this site yet — copy the link and share it however you like.</p>`}
+    : `<p class="hint">No camper contacts on this site yet — copy the link and share it however you like.</p>`}
     <div class="row" style="justify-content:flex-end">
       <button class="btn primary" onclick="document.getElementById('inviteDialog').close()">Done</button>
     </div>`;
@@ -1715,7 +1882,8 @@ function openInviteDialog(siteId) {
 // (Twilio credentials live in Supabase secrets, not in this page).
 async function sendInvitesAuto(siteId) {
   const site = directory && directory.sites.find((s) => s.id === siteId);
-  if (!site || !(site.phones || []).length || !session) return;
+  if (!site || !session) return;
+  if (!(site.phones || []).length && !(site.emails || []).length) return;
   const btn = $("#autoSendBtn");
   if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
   try {
@@ -1726,7 +1894,12 @@ async function sendInvitesAuto(siteId) {
         Authorization: `Bearer ${session.access_token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ phones: site.phones, message: inviteMessage(site) }),
+      body: JSON.stringify({
+        phones: site.phones || [],
+        emails: site.emails || [],
+        subject: `🏕️ Welcome to ${site.name}'s camp kitchen`,
+        message: inviteMessage(site),
+      }),
     });
     if (res.status === 404) {
       toast("🚀 Auto-send isn't set up yet — deploy the send-invites Edge Function (see README) or use the tap-to-text buttons.");
@@ -1745,7 +1918,7 @@ async function sendInvitesAuto(siteId) {
   } catch (e) {
     toast("⚠️ Couldn't reach the invite sender — check your connection");
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = "🚀 Text everyone automatically"; }
+    if (btn) { btn.disabled = false; btn.textContent = "🚀 Send to everyone automatically"; }
   }
 }
 
@@ -1759,24 +1932,87 @@ function copyInviteLink(siteId) {
 /* -------------------- sign-in screens -------------------------- */
 let loginPhone = null;
 
+let loginMethod = "phone"; // "phone" (texted code) or "email" (magic link)
+
 function renderLogin(msg) {
   $("#app").innerHTML = `
     <div class="login-wrap">
       <div class="card">
-        <div class="login-emoji">🏕️📱</div>
+        <div class="login-emoji">🏕️</div>
         <h2>Sign in to Campfire Kitchen</h2>
-        <p class="hint">${msg ? esc(msg) : "Enter your cell number and we'll text you a verification code."}</p>
+        <p class="hint">${msg ? esc(msg) : "Use your cell number or your email — whichever you like."}</p>
+        <div class="method-toggle">
+          <button type="button" id="methodPhone" class="${loginMethod === "phone" ? "active" : ""}">📱 Phone</button>
+          <button type="button" id="methodEmail" class="${loginMethod === "email" ? "active" : ""}">✉️ Email</button>
+        </div>
+        ${loginMethod === "phone" ? `
         <div class="field">
           <label>Cell phone number</label>
           <input type="tel" id="loginPhone" placeholder="e.g. 555-123-4567" autocomplete="tel" inputmode="tel">
         </div>
-        <button class="btn primary" id="sendCodeBtn">Text me a code</button>
+        <button class="btn primary" id="sendCodeBtn">Text me a code</button>` : `
+        <div class="field">
+          <label>Email address</label>
+          <input type="email" id="loginEmail" placeholder="you@example.com" autocomplete="email" inputmode="email">
+        </div>
+        <button class="btn primary" id="sendLinkBtn">Email me a one-time sign-in link</button>`}
       </div>
     </div>`;
-  const send = () => onSendCode();
-  $("#sendCodeBtn").onclick = send;
-  $("#loginPhone").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
-  $("#loginPhone").focus();
+  $("#methodPhone").onclick = () => { loginMethod = "phone"; renderLogin(msg); };
+  $("#methodEmail").onclick = () => { loginMethod = "email"; renderLogin(msg); };
+  if (loginMethod === "phone") {
+    const send = () => onSendCode();
+    $("#sendCodeBtn").onclick = send;
+    $("#loginPhone").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+    $("#loginPhone").focus();
+  } else {
+    const send = () => onSendLink();
+    $("#sendLinkBtn").onclick = send;
+    $("#loginEmail").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+    $("#loginEmail").focus();
+  }
+}
+
+function isEmail(s) { return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s); }
+
+async function onSendLink() {
+  const email = $("#loginEmail").value.trim().toLowerCase();
+  if (!isEmail(email)) {
+    toast("That doesn't look like an email address");
+    return;
+  }
+  const btn = $("#sendLinkBtn");
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+  try {
+    await requestMagicLink(email);
+    renderLinkSent(email);
+  } catch (e) {
+    toast("⚠️ " + e.message);
+    btn.disabled = false;
+    btn.textContent = "Email me a one-time sign-in link";
+  }
+}
+
+function renderLinkSent(email) {
+  $("#app").innerHTML = `
+    <div class="login-wrap">
+      <div class="card">
+        <div class="login-emoji">📬</div>
+        <h2>Check your inbox!</h2>
+        <p class="hint">We emailed a one-time sign-in link to <strong>${esc(email)}</strong>.<br>
+          Open it on this device and you'll land right back here, signed in.</p>
+        <div class="row" style="justify-content:center;gap:16px">
+          <button class="link-btn" id="resendLinkBtn">Resend link</button>
+          <button class="link-btn" id="backToLoginBtn">Use a different email or phone</button>
+        </div>
+      </div>
+    </div>`;
+  $("#resendLinkBtn").onclick = async () => {
+    try { await requestMagicLink(email); toast("New link sent 📬"); }
+    catch (e) { toast("⚠️ " + e.message); }
+  };
+  $("#backToLoginBtn").onclick = () => renderLogin();
 }
 
 async function onSendCode() {
@@ -1876,6 +2112,29 @@ async function init() {
     state = loadLocal();
     render();
     return;
+  }
+  // Returning from an email magic link (or an email-change
+  // confirmation): the session arrives in the URL hash.
+  const hash = consumeAuthHash();
+  if (hash && hash.error) {
+    renderLogin("⚠️ " + hash.error + " — request a fresh link below.");
+    return;
+  }
+  if (hash && hash.tokens) {
+    try {
+      const u = await fetchAuthUser(hash.tokens.access_token);
+      session = {
+        access_token: hash.tokens.access_token,
+        refresh_token: hash.tokens.refresh_token,
+        expires_at: Math.floor(Date.now() / 1000) + hash.tokens.expires_in,
+        user: { id: u.id, phone: u.phone || null, email: u.email || null },
+      };
+      saveSession();
+      toast("You're in! 🏕️");
+    } catch (e) {
+      renderLogin("That sign-in link didn't work — request a fresh one.");
+      return;
+    }
   }
   if (!(await ensureSession())) {
     renderLogin();

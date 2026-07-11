@@ -59,19 +59,22 @@ notifications. The seeded breakfast data lives in the permanent
 - The bar at the top shows the current camp site; **⛺ Switch camp site**
   lists every site, and anyone can open any of them (no per-site access
   limits yet — by design for now).
-- **Chefs create camp sites**: name, emoji, and the cell numbers of all
-  campers (one per line). Creating the site opens the **invite panel**.
+- **Chefs create camp sites**: name, emoji, and the cell numbers and/or
+  emails of all campers (one per line). Creating the site opens the
+  **invite panel**, which sends the welcome note by text or email.
 - **Invites are text messages with a join link** (`…?site=N`). The invite
   panel offers two ways to send them, and can be reopened anytime via
   💬 Invites in the site bar. A camper who taps the link signs in with
   their number and lands directly in that camp site.
-  - **🚀 Text everyone automatically** — sends the invites server-side via
-    the `send-invites` Edge Function (Twilio credentials stay in Supabase
-    secrets, never in this public page). Requires the one-time Edge
-    Function setup below; only chefs may call it.
-  - **Tap-to-text fallback** — per-camper (and "Text everyone") buttons
-    that open the chef's own Messages app pre-filled; hit send. Works with
-    zero setup, plus "Copy link".
+  - **🚀 Send to everyone automatically** — sends the welcome note
+    server-side via the `send-invites` Edge Function: texts through Twilio
+    and emails through Resend (credentials stay in Supabase secrets, never
+    in this public page). Requires the one-time Edge Function setup below;
+    only chefs may call it. Each channel works independently — missing
+    secrets fail only that channel, with per-recipient results.
+  - **Tap-to-send fallback** — per-camper (and "everyone") buttons that
+    open the chef's own Messages or Mail app pre-filled; hit send. Works
+    with zero setup, plus "Copy link".
 - Device-only demo mode is single-site (camp sites need the shared
   backend).
 
@@ -82,22 +85,33 @@ notifications. The seeded breakfast data lives in the permanent
    [`supabase/functions/send-invites/index.ts`](supabase/functions/send-invites/index.ts),
    and deploy. (CLI users: `supabase functions deploy send-invites`.)
 2. Under **Edge Functions → Secrets** add:
-   - `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` (Twilio console)
-   - `TWILIO_FROM` (your Twilio number, `+1…`) — or
+   - For invite **texts**: `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`
+     (Twilio console), plus `TWILIO_FROM` (your Twilio number, `+1…`) — or
      `TWILIO_MESSAGING_SERVICE_SID` instead.
+   - For invite **emails**: `RESEND_API_KEY` (free at resend.com) and
+     `RESEND_FROM` (e.g. `Campfire Kitchen <onboarding@resend.dev>`, or an
+     address on your verified domain).
 3. Done — the 🚀 button in the invite panel now sends real texts. The
    function verifies the caller is a chef (via `campfire_is_chef`) before
    sending, caps each call at 25 numbers, and reports per-number results.
    Until it's deployed, the button explains itself and the tap-to-text
    fallback keeps working.
 
-## Phone sign-in (texted verification codes)
+## Sign-in: texted code or emailed one-time link
 
-In live-sync mode everyone — chef and campers — signs in with their cell
-number: enter the number, receive a texted verification code, type it in.
-Powered by Supabase Auth SMS OTP; no extra backend.
+In live-sync mode everyone — chef and campers — signs in with **either**
+their cell number (texted verification code) or their email (one-time
+magic link). Powered by Supabase Auth; no extra backend.
 
-- The **verified phone number is the user's identity**: orders and
+- **Phone path**: enter the number, get a 6-digit code by text, type it in.
+- **Email path**: enter the address, get a one-time sign-in link by email —
+  tap it and land back in the app, signed in. (The link should be opened
+  on the device you want to use.)
+- **One account, up to two identifiers**: a user needs only one of the
+  two, and can link the other later via the **Account** panel (next to
+  Sign out) — add an email (confirmation link) or add a phone (verification
+  code). Orders and notifications match whichever identity was used.
+- The **verified phone/email is the user's identity**: orders and
   notifications are keyed to it, so two campers named "Sam" can't collide
   or read each other's notifications. The name in the "Ordering as" bar is
   just the display name.
@@ -124,23 +138,29 @@ Who counts as a chef is decided **by the database**, not the page:
   `chefPhones`/`chefPin` values in `config.js` are only legacy fallbacks
   for a pre-v3 database or the offline demo.
 
-### One-time Supabase setup for SMS sign-in
+### One-time Supabase setup for sign-in
 
-1. Run (or re-run) `supabase-setup.sql` in the SQL Editor — it now grants
-   access to signed-in users only.
-2. In the dashboard under **Authentication → Sign In / Providers**, enable
-   the **Phone** provider.
-3. Supabase doesn't send SMS itself — connect a provider under the Phone
-   settings (Twilio is the usual choice: create a free trial account at
-   twilio.com, buy/claim a number, then paste the Account SID, Auth Token,
-   and Messaging Service/From number into Supabase).
-4. **To try it before setting up Twilio:** in the Phone provider settings,
-   add a **Test OTP** — a phone number with a fixed code (e.g.
-   `+15555550100` → `123456`). Signing in with that number then works
-   without any SMS being sent.
+1. Run (or re-run) `supabase-setup.sql` in the SQL Editor.
+2. **Phone codes:** under **Authentication → Sign In / Providers**, enable
+   the **Phone** provider. Supabase doesn't send SMS itself — connect a
+   provider under the Phone settings (Twilio is the usual choice: create a
+   free trial account at twilio.com, buy/claim a number, then paste the
+   Account SID, Auth Token, and Messaging Service/From number into
+   Supabase). **To try it before Twilio:** add a **Test OTP** — a phone
+   number with a fixed code (e.g. `+15555550100` → `123456`) — and sign in
+   with that; no SMS is sent.
+3. **Email links:** the **Email** provider is enabled by default. Two
+   things to check:
+   - **Authentication → URL Configuration → Site URL** must be set to
+     `https://devtator.github.io/SmartThingsPublic/` — the magic link
+     redirects there. (Without it, links land on `localhost`.)
+   - Supabase's built-in mailer is heavily rate-limited (a couple of
+     emails per hour) and for dev only. For real campers, plug in custom
+     SMTP under **Authentication → Emails / SMTP settings** (Resend,
+     Postmark, Gmail app password, etc.).
 
-Note: Supabase's shortest code length is **6 digits** (configurable in the
-Phone settings; 4 is below its minimum).
+Note: Supabase's shortest SMS code length is **6 digits** (configurable in
+the Phone settings; 4 is below its minimum).
 
 **Pilot-grade caveats, on purpose:**
 - Any signed-in user can still *read* everything (all sites, all orders),
