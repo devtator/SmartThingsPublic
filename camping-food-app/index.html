@@ -520,6 +520,7 @@ function setSyncPill(mode) {
 
 async function remoteFetchRow() {
   const res = await fetch(`${SB_URL}?id=eq.1&select=version,data`, { headers: SB_HEADERS });
+  if (res.status === 404) throw new Error("table-missing"); // supabase-setup.sql not run yet
   if (!res.ok) throw new Error(`fetch ${res.status}`);
   const rows = await res.json();
   return rows[0] || null;
@@ -1236,9 +1237,13 @@ async function init() {
     render();
   } catch (e) {
     setSyncPill("offline");
-    $("#app").innerHTML = `<div class="empty">⚠️ Couldn't reach the camp kitchen server.<br>
-      Check your connection (and the Supabase settings in <code>config.js</code>), then
-      <a href="javascript:location.reload()">reload</a>.</div>`;
+    $("#app").innerHTML = e.message === "table-missing"
+      ? `<div class="empty">🛠️ The shared database isn't set up yet.<br>
+          Run <code>supabase-setup.sql</code> in the Supabase project's SQL Editor, then
+          <a href="javascript:location.reload()">reload</a>.</div>`
+      : `<div class="empty">⚠️ Couldn't reach the camp kitchen server.<br>
+          Check your connection (and the Supabase settings in <code>config.js</code>), then
+          <a href="javascript:location.reload()">reload</a>.</div>`;
     return;
   }
   startPolling();

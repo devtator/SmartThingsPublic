@@ -18,9 +18,9 @@ window.CAMPFIRE_CONFIG = {
   // The "anon / public" API key from Supabase → Settings → API.
   // (It is safe-ish to publish for a demo, but anyone who finds it
   // can read/write the shared data — see README caveats.)
-  supabaseAnonKey: "",
+  supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9jcXR1amd4ZnRkYmp1dWhybHhsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MTE0ODcsImV4cCI6MjA5OTI4NzQ4N30.qMnB01ce2UjocD_00xf-_blEEb3M9PMU8h8eBMaydJY",
 
   // Optional: require this PIN to open the Chef view, so campers
   // can't wander into the kitchen controls. Empty = no PIN.
-  chefPin: "",
+  chefPin: "0711",
 };
