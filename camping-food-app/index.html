@@ -459,7 +459,7 @@
  * always stay local.
  * ------------------------------------------------------------- */
 
-const STORE_KEY = "campfire-kitchen-v2";
+const STORE_KEY = "campfire-kitchen-v3";
 const PREFS_KEY = "campfire-kitchen-prefs-v1";
 const CFG = window.CAMPFIRE_CONFIG || {};
 const REMOTE = !!(CFG.supabaseUrl && CFG.supabaseAnonKey);
@@ -474,6 +474,13 @@ function seedData() {
       desc: "Two fried eggs, crispy campfire bacon, and melted cheddar on a griddle-toasted brioche bun.",
       price: 8.0, available: true, photo: null,
       slots: ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM"],
+      // Camper-configurable options: "one" = choose exactly one
+      // (first choice preselected), "any" = check as many as you like.
+      optionGroups: [
+        { name: "Bread", type: "one", choices: ["Bagel", "Wrap", "Toast"] },
+        { name: "Add-ons", type: "any", choices: ["Cheese", "Bacon", "Hash browns"] },
+        { name: "Side", type: "any", choices: ["Bacon", "Hash browns"] },
+      ],
     },
     {
       id: "m2", emoji: "🥐", name: "Sausage, Egg & Cheese Croissant",
@@ -495,6 +502,10 @@ function seedData() {
       desc: "Scrambled eggs over crispy skillet potatoes with bacon crumbles, cheddar, and fire-roasted salsa.",
       price: 9.5, available: true, photo: null,
       slots: ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM", "9:00 AM"],
+      optionGroups: [
+        { name: "Salsa", type: "one", choices: ["Mild", "Fire-roasted hot"] },
+        { name: "Extras", type: "any", choices: ["Avocado", "Extra cheese"] },
+      ],
     },
     {
       id: "m5", emoji: "🥑", name: "Veggie Sunrise Bowl",
@@ -515,10 +526,12 @@ function seedData() {
   // Demo orders use the camper's name as camperId; real signed-in
   // users get their verified phone number instead.
   const orders = [
-    { id: "o1", mealId: "m1", camper: "Riley",  camperId: "Riley",  qty: 2, preferred: "7:30 AM", notes: "Extra crispy bacon please!", status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o1", mealId: "m1", camper: "Riley",  camperId: "Riley",  qty: 2, preferred: "7:30 AM", notes: "Extra crispy bacon please!", status: "pending",   confirmedSlot: null,      review: null,
+      options: { "Bread": ["Bagel"], "Add-ons": ["Cheese", "Bacon"], "Side": ["Hash browns"] } },
     { id: "o2", mealId: "m1", camper: "Sam",    camperId: "Sam",    qty: 1, preferred: "7:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
     { id: "o3", mealId: "m1", camper: "Dana",   camperId: "Dana",   qty: 1, preferred: "8:00 AM", notes: "No cheese",                   status: "pending",   confirmedSlot: null,      review: null },
-    { id: "o4", mealId: "m4", camper: "Alex",   camperId: "Alex",   qty: 1, preferred: "8:00 AM", notes: "Salsa on the side",           status: "pending",   confirmedSlot: null,      review: null },
+    { id: "o4", mealId: "m4", camper: "Alex",   camperId: "Alex",   qty: 1, preferred: "8:00 AM", notes: "Salsa on the side",           status: "pending",   confirmedSlot: null,      review: null,
+      options: { "Salsa": ["Mild"], "Extras": ["Avocado"] } },
     { id: "o5", mealId: "m4", camper: "Jordan", camperId: "Jordan", qty: 2, preferred: "8:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
     { id: "o6", mealId: "m5", camper: "Morgan", camperId: "Morgan", qty: 1, preferred: "9:00 AM", notes: "Extra avocado",               status: "served",    confirmedSlot: "9:00 AM", review: null },
     { id: "o7", mealId: "m6", camper: "Dana",   camperId: "Dana",   qty: 1, preferred: "8:30 AM", notes: "",                            status: "served",    confirmedSlot: "8:30 AM",
@@ -1183,6 +1196,7 @@ function camperView() {
           <div class="meal-meta">
             <span class="price">${money(m.price)}</span>
             ${ratingChip(m.id)}
+            ${(m.optionGroups || []).length ? `<span class="chip">🛠️ customizable</span>` : ""}
             ${m.slots.map((s) => `<span class="chip slot">${s}</span>`).join("")}
           </div>
           <button class="btn primary" onclick="openOrderDialog('${m.id}')">Order</button>
@@ -1206,10 +1220,12 @@ function camperView() {
         tail = `<span class="status served">Picked up</span>
                 <button class="btn primary small" onclick="openRateDialog('${o.id}')">⭐ Rate &amp; thank the chef</button>`;
       }
+      const opts = optSummary(o);
       return `
         <div class="order-line">
           <span>${m.emoji}</span>
           <span class="who">${o.qty}× ${esc(m.name)}</span>
+          ${opts ? `<span class="chip">${esc(opts)}</span>` : ""}
           <span class="pref">preferred ${o.preferred}</span>
           ${tail}
         </div>`;
@@ -1346,6 +1362,8 @@ function chefOrderGroup({ meal, orders }) {
           <span class="who">${esc(o.camper)}</span>
           <span>${o.qty}×</span>
           <span class="pref">prefers ${o.preferred}</span>
+          ${Object.entries(o.options || {}).map(([g, cs]) =>
+            `<span class="chip">${esc(g)}: ${esc(cs.join(", "))}</span>`).join("")}
           ${o.notes ? `<span class="chip">📝 ${esc(o.notes)}</span>` : ""}
         </div>
       `).join("")}
@@ -1569,6 +1587,13 @@ function openOrderDialog(mealId) {
         ${m.slots.map((s) => `<button type="button" data-slot="${s}">${s}</button>`).join("")}
       </div>
     </div>
+    ${(m.optionGroups || []).map((g, gi) => `
+    <div class="field">
+      <label>${esc(g.name)}${g.type === "any" ? ` <span style="font-weight:400;color:var(--ink-soft)">(pick any)</span>` : ""}</label>
+      <div class="slot-picker opt-group" data-gi="${gi}" data-type="${g.type}">
+        ${g.choices.map((c, ci) => `<button type="button" data-c="${esc(c)}" class="${g.type === "one" && ci === 0 ? "selected" : ""}">${esc(c)}</button>`).join("")}
+      </div>
+    </div>`).join("")}
     <div class="field">
       <label>How many?</label>
       <input type="number" id="dlgQty" min="1" max="10" value="1">
@@ -1590,7 +1615,37 @@ function openOrderDialog(mealId) {
       $("#dlgPlace").disabled = false;
     };
   });
+  // Option pills: "one" groups behave like radios, "any" like checkboxes.
+  dlg.querySelectorAll(".opt-group").forEach((gEl) => {
+    gEl.querySelectorAll("button").forEach((b) => {
+      b.onclick = () => {
+        if (gEl.dataset.type === "one") {
+          gEl.querySelectorAll("button").forEach((x) => x.classList.remove("selected"));
+          b.classList.add("selected");
+        } else {
+          b.classList.toggle("selected");
+        }
+      };
+    });
+  });
   dlg.showModal();
+}
+
+// Selections currently made in the open order dialog, keyed by group name.
+function collectDialogOptions(meal) {
+  const options = {};
+  document.querySelectorAll("#orderDialog .opt-group").forEach((gEl) => {
+    const g = (meal.optionGroups || [])[+gEl.dataset.gi];
+    if (!g) return;
+    const sel = [...gEl.querySelectorAll("button.selected")].map((b) => b.dataset.c);
+    if (sel.length) options[g.name] = sel;
+  });
+  return options;
+}
+
+function optSummary(o) {
+  return Object.entries(o.options || {})
+    .map(([g, cs]) => `${g}: ${cs.join(", ")}`).join(" · ");
 }
 
 function placeOrder(mealId) {
@@ -1600,12 +1655,13 @@ function placeOrder(mealId) {
   const notes = $("#dlgNotes").value.trim();
   const slot = dialogSlot;
   const camperId = myId();
+  const options = collectDialogOptions(mealById(mealId) || {});
   commit((s) => {
     const meal = s.meals.find((m) => m.id === mealId);
     if (!meal) return;
     s.orders.push({
       id: uid("o"), mealId, camper: name, camperId, qty,
-      preferred: slot, notes, status: "pending", confirmedSlot: null, review: null,
+      preferred: slot, notes, options, status: "pending", confirmedSlot: null, review: null,
     });
     notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot}).${notes ? " Note: " + notes : ""}`);
   }).then((ok) => {
@@ -1658,10 +1714,47 @@ function handlePhotoInput(e) {
   reader.readAsDataURL(file);
 }
 
+/* Option-group builder inside the meal editor. `pendingGroups` rows
+ * are {name, type, choicesText}; text inputs mutate the row in place
+ * so typing never re-renders (keeps focus). */
+let pendingGroups = [];
+
+function renderGroupEditor() {
+  const wrap = $("#mGroups");
+  if (!wrap) return;
+  wrap.innerHTML = pendingGroups.map((g, i) => `
+    <div class="card" style="box-shadow:none;padding:10px;margin-bottom:8px;gap:6px">
+      <div class="row">
+        <input type="text" placeholder="Group name, e.g. Bread" value="${esc(g.name)}"
+               style="flex:1;min-width:120px" oninput="pendingGroups[${i}].name=this.value">
+        <select style="width:auto" onchange="pendingGroups[${i}].type=this.value">
+          <option value="one" ${g.type === "one" ? "selected" : ""}>Pick one</option>
+          <option value="any" ${g.type === "any" ? "selected" : ""}>Pick any</option>
+        </select>
+        <button type="button" class="btn ghost small" onclick="removeOptionGroup(${i})">✕</button>
+      </div>
+      <input type="text" placeholder="Choices, comma-separated — e.g. Bagel, Wrap, Toast"
+             value="${esc(g.choicesText)}" oninput="pendingGroups[${i}].choicesText=this.value">
+    </div>`).join("");
+}
+
+function addOptionGroup() {
+  pendingGroups.push({ name: "", type: "one", choicesText: "" });
+  renderGroupEditor();
+}
+
+function removeOptionGroup(i) {
+  pendingGroups.splice(i, 1);
+  renderGroupEditor();
+}
+
 function openMealDialog(mealId) {
   const m = mealId ? mealById(mealId) : null;
   const slots = m ? [...m.slots] : ["7:30 AM", "8:00 AM"];
   pendingPhoto = m ? m.photo : null;
+  pendingGroups = (m && m.optionGroups || []).map((g) => ({
+    name: g.name, type: g.type, choicesText: g.choices.join(", "),
+  }));
   const dlg = $("#mealDialog");
   dlg.innerHTML = `
     <h3>${m ? "Edit meal" : "Add a meal"}</h3>
@@ -1687,6 +1780,11 @@ function openMealDialog(mealId) {
         ${ALL_SLOTS.map((s) => `<button type="button" data-slot="${s}" class="${slots.includes(s) ? "selected" : ""}">${s}</button>`).join("")}
       </div>
     </div>
+    <div class="field">
+      <label>Camper options (optional) — e.g. Bread: Bagel, Wrap, Toast</label>
+      <div id="mGroups"></div>
+      <button type="button" class="btn ghost small" id="mAddGroup" onclick="addOptionGroup()">＋ Add option group</button>
+    </div>
     <div class="row" style="justify-content:flex-end">
       <button class="btn ghost" onclick="document.getElementById('mealDialog').close()">Cancel</button>
       <button class="btn green" onclick="saveMeal(${m ? `'${m.id}'` : "null"})">Save meal</button>
@@ -1697,6 +1795,7 @@ function openMealDialog(mealId) {
   });
   $("#mPhoto").addEventListener("change", handlePhotoInput);
   renderPhotoPreview();
+  renderGroupEditor();
   dlg.showModal();
 }
 
@@ -1713,6 +1812,13 @@ function saveMeal(mealId) {
     price: Math.max(0, parseFloat($("#mPrice").value) || 0),
     slots,
     photo: pendingPhoto,
+    optionGroups: pendingGroups
+      .map((g) => ({
+        name: g.name.trim(),
+        type: g.type === "any" ? "any" : "one",
+        choices: (g.choicesText || "").split(",").map((s) => s.trim()).filter(Boolean),
+      }))
+      .filter((g) => g.name && g.choices.length),
   };
   commit((s) => {
     if (mealId) {

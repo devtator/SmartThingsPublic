@@ -180,6 +180,10 @@ The app has two roles, switchable with the toggle in the header:
 ### 👨‍🍳 Chef
 - **Sets the meals** — name, description, category, price, and whether it's
   on the menu today.
+- **Adds camper options in groups** — e.g. *Bread: Bagel, Wrap, Toast*
+  (pick one) or *Add-ons: Cheese, Bacon, Hash browns* (pick any). Each
+  group is a name, a pick-one/pick-any switch, and a comma-separated list
+  of choices. Campers' selections show as chips on each incoming order.
 - **Uploads a photo of the dish (optional)** — chosen in the meal editor;
   images are downscaled in the browser (max 640px wide JPEG) and stored
   locally, and show on the meal cards in both views.
@@ -200,7 +204,9 @@ The app has two roles, switchable with the toggle in the header:
 - **Browses the menu** of available meals with photos, prices, ratings, and
   offered time slots.
 - **Places an order** — chooses a preferred pickup time from the chef's
-  offered slots, a quantity, and optional notes (e.g. "no cheese").
+  offered slots, configures the meal with simple tap-able choices
+  (pick-one groups preselect their first choice; pick-any groups work
+  like checkboxes), plus a quantity and optional notes.
 - **Gets notified** — the 🔔 bell shows when the chef confirms the actual
   pickup time. Orders show *Awaiting chef* until then, and the confirmed
   pickup time after.

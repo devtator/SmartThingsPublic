@@ -9,7 +9,12 @@
       "description": "Two fried eggs, crispy campfire bacon, and melted cheddar on a griddle-toasted brioche bun.",
       "price": 8.00,
       "available": true,
-      "cookSlots": ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM"]
+      "cookSlots": ["7:00 AM", "7:30 AM", "8:00 AM", "8:30 AM"],
+      "optionGroups": [
+        { "name": "Bread",   "type": "one", "choices": ["Bagel", "Wrap", "Toast"] },
+        { "name": "Add-ons", "type": "any", "choices": ["Cheese", "Bacon", "Hash browns"] },
+        { "name": "Side",    "type": "any", "choices": ["Bacon", "Hash browns"] }
+      ]
     },
     {
       "id": "m2",
@@ -70,6 +75,7 @@
   "notes": {
     "orderStatuses": ["pending", "confirmed", "served"],
     "camperId": "Orders also carry a `camperId` — the camper's verified phone number (E.164) when SMS sign-in is on, or the display name in device-only demo mode. Notifications are addressed to it.",
+    "optionGroups": "Meals may define option groups: { name, type: 'one'|'any', choices: [...] }. 'one' renders as pick-exactly-one (first choice preselected), 'any' as checkboxes. The camper's selections are stored on the order as `options`: { groupName: [choices...] }.",
     "mealPhoto": "Each meal may also carry a `photo` field (data-URL JPEG, downscaled to max 640px wide) uploaded by the chef; omitted here to keep the JSON readable.",
     "review": "Set on an order after the camper rates a served meal: { rating: 1-5, comment: string, when: string }. Submitting a review notifies the chef."
   }
