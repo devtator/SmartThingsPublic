@@ -207,6 +207,27 @@
     letter-spacing: 8px;
     font-weight: 700;
   }
+  .emoji-picker {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .emoji-picker button {
+    font-size: 1.35rem;
+    line-height: 1;
+    background: var(--cream);
+    border: 1.5px solid var(--line);
+    border-radius: 10px;
+    padding: 6px 8px;
+    cursor: pointer;
+    transition: transform 0.1s;
+  }
+  .emoji-picker button:hover { transform: scale(1.12); }
+  .emoji-picker button.selected {
+    border-color: var(--pine);
+    background: #eef4ee;
+    box-shadow: 0 0 0 1.5px var(--pine);
+  }
   .method-toggle {
     display: flex;
     align-self: center;
@@ -460,6 +481,18 @@
  * ------------------------------------------------------------- */
 
 const STORE_KEY = "campfire-kitchen-v3";
+
+// Icon libraries for the pickers: common breakfast fare for meals,
+// outdoorsy scenes for camp sites. A free-text field stays available
+// for anything not covered.
+const MEAL_EMOJIS = [
+  "🍳", "🥓", "🥞", "🧇", "🥐", "🥯", "🍞", "🥖", "🫓",
+  "🥪", "🌯", "🌮", "🫔", "🥙", "🍔", "🌭", "🍗",
+  "🥔", "🧀", "🥚", "🥣", "🥗", "🥑", "🍲",
+  "🍩", "🧁", "🍪", "🍎", "🍌", "🍓", "🫐", "🍊", "🍉",
+  "☕", "🍵", "🥛", "🧃", "🥤", "🍯",
+];
+const SITE_EMOJIS = ["🏕️", "⛺", "🏞️", "🌲", "🌄", "🌅", "🔥", "🏔️", "🛶", "🎣", "🥾", "🌌"];
 const PREFS_KEY = "campfire-kitchen-prefs-v1";
 const CFG = window.CAMPFIRE_CONFIG || {};
 const REMOTE = !!(CFG.supabaseUrl && CFG.supabaseAnonKey);
@@ -1714,6 +1747,34 @@ function handlePhotoInput(e) {
   reader.readAsDataURL(file);
 }
 
+/* ---------------------- emoji picker ---------------------------- */
+function emojiPickerHtml(pickId, inputId, list, current) {
+  return `
+    <div class="emoji-picker" id="${pickId}">
+      ${list.map((e) => `<button type="button" data-e="${e}" class="${e === current ? "selected" : ""}" title="${e}">${e}</button>`).join("")}
+    </div>
+    <div class="row" style="margin-top:6px">
+      <span class="hint" style="margin:0">…or type your own:</span>
+      <input type="text" id="${inputId}" value="${esc(current)}" maxlength="4" style="width:74px;text-align:center">
+    </div>`;
+}
+
+function wireEmojiPicker(pickId, inputId) {
+  const wrap = $(`#${pickId}`);
+  const input = $(`#${inputId}`);
+  if (!wrap || !input) return;
+  wrap.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      input.value = b.dataset.e;
+      wrap.querySelectorAll("button").forEach((x) => x.classList.toggle("selected", x === b));
+    };
+  });
+  input.addEventListener("input", () => {
+    const v = input.value.trim();
+    wrap.querySelectorAll("button").forEach((x) => x.classList.toggle("selected", x.dataset.e === v));
+  });
+}
+
 /* Option-group builder inside the meal editor. `pendingGroups` rows
  * are {name, type, choicesText}; text inputs mutate the row in place
  * so typing never re-renders (keeps focus). */
@@ -1760,7 +1821,7 @@ function openMealDialog(mealId) {
     <h3>${m ? "Edit meal" : "Add a meal"}</h3>
     <div class="sub">Set what you're cooking and the times you're willing to cook it.</div>
     <div class="field"><label>Name</label><input type="text" id="mName" value="${m ? esc(m.name) : ""}" placeholder="e.g. Breakfast Burrito"></div>
-    <div class="field"><label>Emoji</label><input type="text" id="mEmoji" value="${m ? m.emoji : "🍳"}" maxlength="4"></div>
+    <div class="field"><label>Icon</label>${emojiPickerHtml("mEmojiPick", "mEmoji", MEAL_EMOJIS, m ? m.emoji : "🍳")}</div>
     <div class="field"><label>Category</label>
       <select id="mCat">
         ${["Sandwich", "Bowl", "Plate", "Drink", "Other"].map((c) =>
@@ -1794,6 +1855,7 @@ function openMealDialog(mealId) {
     b.onclick = () => b.classList.toggle("selected");
   });
   $("#mPhoto").addEventListener("change", handlePhotoInput);
+  wireEmojiPicker("mEmojiPick", "mEmoji");
   renderPhotoPreview();
   renderGroupEditor();
   dlg.showModal();
@@ -1911,7 +1973,7 @@ function openSiteDialog() {
     <h3>⛺ New camp site</h3>
     <div class="sub">Give your camp a name and list your campers' cell numbers — you'll text each of them an invite link to this site's kitchen.</div>
     <div class="field"><label>Camp site name</label><input type="text" id="sName" placeholder="e.g. Lake View Loop, Site 14"></div>
-    <div class="field"><label>Emoji</label><input type="text" id="sEmoji" value="🏞️" maxlength="4"></div>
+    <div class="field"><label>Icon</label>${emojiPickerHtml("sEmojiPick", "sEmoji", SITE_EMOJIS, "🏕️")}</div>
     <div class="field">
       <label>Camper cell numbers and/or emails (one per line or comma-separated)</label>
       <textarea id="sPhones" rows="4" placeholder="555-123-4567&#10;sam@example.com&#10;555-987-6543"></textarea>
@@ -1920,6 +1982,7 @@ function openSiteDialog() {
       <button class="btn ghost" onclick="document.getElementById('siteDialog').close()">Cancel</button>
       <button class="btn primary" onclick="createSite()">Create camp site</button>
     </div>`;
+  wireEmojiPicker("sEmojiPick", "sEmoji");
   dlg.showModal();
 }
 
