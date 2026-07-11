@@ -1,40 +1,184 @@
--- Campfire Kitchen shared-state table + access policies.
--- Run this once in your Supabase project's SQL editor
+-- Campfire Kitchen database setup (v3).
+-- Run this in your Supabase project's SQL editor
 -- (Dashboard → SQL Editor → New query → paste → Run).
--- Safe to re-run: it drops and recreates its own policies.
+-- Safe to re-run: it drops and recreates its own policies/functions.
 --
--- The app stores one JSONB row per camp site (row 0 is the directory
--- of camp sites, row 1 is the Demo Campground, new sites get the next
--- id) and uses the `version` column for optimistic concurrency:
--- writers only succeed if the version they read is still current,
--- otherwise they re-fetch and re-apply.
---
--- Access requires sign-in: users authenticate with their cell number
--- via Supabase Auth SMS codes, and only the `authenticated` role can
--- read or write. (Remember to enable the Phone provider and an SMS
--- sender under Authentication → Sign In / Up → Phone — see README.)
+-- v3 moves the chef checks SERVER-SIDE:
+--  * campfire_chefs table lists the chefs' verified phone numbers.
+--  * All writes go through the campfire_write / campfire_seed
+--    functions, which validate the caller: only chefs may change
+--    menus, confirm/serve orders belonging to others, edit the camp
+--    site directory, or create camp sites. Campers may only add or
+--    change their OWN orders (matched to their verified phone).
+--  * Direct INSERT/UPDATE on the table are no longer allowed —
+--    even a tampered client can't bypass the rules.
 
+-- ------------------------------------------------------------------
+-- Data table: one JSONB row per camp site (row 0 = site directory,
+-- row 1 = Demo Campground). `version` powers optimistic concurrency.
 create table if not exists public.campfire_state (
   id      integer primary key,
   version bigint  not null default 1,
   data    jsonb   not null
 );
-
 alter table public.campfire_state enable row level security;
 
--- Remove the older anon-access policies if they exist.
-drop policy if exists "campfire anon select" on public.campfire_state;
-drop policy if exists "campfire anon insert" on public.campfire_state;
-drop policy if exists "campfire anon update" on public.campfire_state;
+-- Chefs, by verified phone number (E.164). Add more chefs with:
+--   insert into public.campfire_chefs (phone) values ('+1XXXXXXXXXX');
+create table if not exists public.campfire_chefs (
+  phone text primary key
+);
+alter table public.campfire_chefs enable row level security;
+-- (No policies on purpose: only the security-definer functions below
+-- read it, so the chef list is not directly visible to clients.)
 
--- Phone-verified (signed-in) users can read and write the shared row.
-drop policy if exists "campfire auth select" on public.campfire_state;
-drop policy if exists "campfire auth insert" on public.campfire_state;
-drop policy if exists "campfire auth update" on public.campfire_state;
+insert into public.campfire_chefs (phone) values ('+16175298470')
+on conflict do nothing;
+
+-- ------------------------------------------------------------------
+-- Policies: signed-in users can READ everything. All writes must go
+-- through the functions below, so the old write policies are dropped
+-- and not recreated.
+drop policy if exists "campfire anon select"  on public.campfire_state;
+drop policy if exists "campfire anon insert"  on public.campfire_state;
+drop policy if exists "campfire anon update"  on public.campfire_state;
+drop policy if exists "campfire auth select"  on public.campfire_state;
+drop policy if exists "campfire auth insert"  on public.campfire_state;
+drop policy if exists "campfire auth update"  on public.campfire_state;
 
 create policy "campfire auth select" on public.campfire_state
   for select to authenticated using (true);
-create policy "campfire auth insert" on public.campfire_state
-  for insert to authenticated with check (id >= 0);
-create policy "campfire auth update" on public.campfire_state
-  for update to authenticated using (id >= 0) with check (id >= 0);
+
+-- ------------------------------------------------------------------
+-- Helpers
+create or replace function public.jwt_phone()
+returns text
+language sql stable
+as $$
+  select case
+    when coalesce(auth.jwt()->>'phone', '') = '' then null
+    else '+' || ltrim(auth.jwt()->>'phone', '+')
+  end;
+$$;
+
+create or replace function public.campfire_is_chef()
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1 from campfire_chefs c where c.phone = public.jwt_phone()
+  );
+$$;
+
+-- ------------------------------------------------------------------
+-- campfire_seed: create a row if it doesn't exist; returns its
+-- current version either way. Anyone signed in may seed the
+-- directory (0) and Demo Campground (1) on first boot; other rows
+-- require the caller to be a chef or the site to already be listed
+-- in the directory (covers a camper racing a just-created site).
+create or replace function public.campfire_seed(p_id integer, p_data jsonb)
+returns bigint
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_dir jsonb;
+  v_version bigint;
+begin
+  if auth.role() is distinct from 'authenticated' then
+    raise exception 'sign in required';
+  end if;
+  if p_id is null or p_id < 0 or p_data is null then
+    raise exception 'bad request';
+  end if;
+  if p_id > 1 and not public.campfire_is_chef() then
+    select data into v_dir from campfire_state where id = 0;
+    if v_dir is null or not exists (
+      select 1 from jsonb_array_elements(coalesce(v_dir->'sites', '[]'::jsonb)) s
+      where (s->>'id')::int = p_id
+    ) then
+      raise exception 'only the chef can create camp sites';
+    end if;
+  end if;
+  insert into campfire_state (id, version, data) values (p_id, 1, p_data)
+  on conflict (id) do nothing;
+  select version into v_version from campfire_state where id = p_id;
+  return v_version;
+end;
+$$;
+
+-- ------------------------------------------------------------------
+-- campfire_write: the only way to update a row. Returns the new
+-- version on success, or -1 when someone else wrote first (the
+-- client re-fetches and retries). Chefs may change anything;
+-- campers may not touch the menu, the directory, or anyone else's
+-- orders.
+create or replace function public.campfire_write(
+  p_id integer, p_expected_version bigint, p_data jsonb)
+returns bigint
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_phone text := public.jwt_phone();
+  v_chef  boolean := public.campfire_is_chef();
+  v_old   campfire_state%rowtype;
+begin
+  if auth.role() is distinct from 'authenticated' then
+    raise exception 'sign in required';
+  end if;
+  if p_id is null or p_id < 0 or p_data is null then
+    raise exception 'bad request';
+  end if;
+
+  select * into v_old from campfire_state where id = p_id for update;
+  if not found then
+    raise exception 'no such camp site';
+  end if;
+  if v_old.version is distinct from p_expected_version then
+    return -1; -- concurrent write: client refetches and retries
+  end if;
+
+  if not v_chef then
+    if p_id = 0 then
+      raise exception 'only the chef can change the camp site list';
+    end if;
+    if (v_old.data->'meals') is distinct from (p_data->'meals') then
+      raise exception 'only the chef can change the menu';
+    end if;
+    if exists (
+      with old_orders as (
+        select value->>'id' as id, value as v
+        from jsonb_array_elements(coalesce(v_old.data->'orders', '[]'::jsonb))
+      ),
+      new_orders as (
+        select value->>'id' as id, value as v
+        from jsonb_array_elements(coalesce(p_data->'orders', '[]'::jsonb))
+      ),
+      changed as (
+        select o.v as ov, n.v as nv
+        from old_orders o
+        full outer join new_orders n using (id)
+        where o.v is distinct from n.v
+      )
+      select 1 from changed
+      where (ov is not null and coalesce(ov->>'camperId', '') is distinct from v_phone)
+         or (nv is not null and coalesce(nv->>'camperId', '') is distinct from v_phone)
+    ) then
+      raise exception 'you can only change your own orders';
+    end if;
+  end if;
+
+  update campfire_state
+     set version = v_old.version + 1, data = p_data
+   where id = p_id;
+  return v_old.version + 1;
+end;
+$$;
+
+-- ------------------------------------------------------------------
+-- Only signed-in users may call the functions.
+revoke all on function public.campfire_is_chef() from public, anon;
+revoke all on function public.campfire_seed(integer, jsonb) from public, anon;
+revoke all on function public.campfire_write(integer, bigint, jsonb) from public, anon;
+grant execute on function public.campfire_is_chef() to authenticated;
+grant execute on function public.campfire_seed(integer, jsonb) to authenticated;
+grant execute on function public.campfire_write(integer, bigint, jsonb) to authenticated;

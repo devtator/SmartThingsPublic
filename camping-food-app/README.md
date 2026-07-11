@@ -61,18 +61,35 @@ notifications. The seeded breakfast data lives in the permanent
   limits yet — by design for now).
 - **Chefs create camp sites**: name, emoji, and the cell numbers of all
   campers (one per line). Creating the site opens the **invite panel**.
-- **Invites are text messages with a join link** (`…?site=N`). Each button
-  in the invite panel opens the chef's own Messages app pre-filled with the
-  camper's number and the invite text — hit send and it's on its way. There
-  are also "Text everyone" and "Copy link" options, and the panel can be
-  reopened anytime via 💬 Invites in the site bar. A camper who taps the
-  link signs in with their number and lands directly in that camp site.
-- Invites come from the chef's own phone on purpose: sending them
-  server-side would require exposing SMS credentials from a static site.
-  If automatic sending becomes worth it, the upgrade path is a small
-  Supabase Edge Function holding the Twilio secrets.
+- **Invites are text messages with a join link** (`…?site=N`). The invite
+  panel offers two ways to send them, and can be reopened anytime via
+  💬 Invites in the site bar. A camper who taps the link signs in with
+  their number and lands directly in that camp site.
+  - **🚀 Text everyone automatically** — sends the invites server-side via
+    the `send-invites` Edge Function (Twilio credentials stay in Supabase
+    secrets, never in this public page). Requires the one-time Edge
+    Function setup below; only chefs may call it.
+  - **Tap-to-text fallback** — per-camper (and "Text everyone") buttons
+    that open the chef's own Messages app pre-filled; hit send. Works with
+    zero setup, plus "Copy link".
 - Device-only demo mode is single-site (camp sites need the shared
   backend).
+
+### One-time setup for automatic invite texts (Edge Function)
+
+1. In the Supabase dashboard: **Edge Functions → Deploy a new function**,
+   name it exactly `send-invites`, paste the contents of
+   [`supabase/functions/send-invites/index.ts`](supabase/functions/send-invites/index.ts),
+   and deploy. (CLI users: `supabase functions deploy send-invites`.)
+2. Under **Edge Functions → Secrets** add:
+   - `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN` (Twilio console)
+   - `TWILIO_FROM` (your Twilio number, `+1…`) — or
+     `TWILIO_MESSAGING_SERVICE_SID` instead.
+3. Done — the 🚀 button in the invite panel now sends real texts. The
+   function verifies the caller is a chef (via `campfire_is_chef`) before
+   sending, caps each call at 25 numbers, and reports per-number results.
+   Until it's deployed, the button explains itself and the tap-to-text
+   fallback keeps working.
 
 ## Phone sign-in (texted verification codes)
 
@@ -87,10 +104,25 @@ Powered by Supabase Auth SMS OTP; no extra backend.
 - Sessions persist on the device and refresh automatically; there's a
   **Sign out** link next to the (masked) phone number.
 - The database policies (see `supabase-setup.sql`) only allow signed-in
-  users to read/write — the public anon key alone is no longer enough.
-- **`chefPhones`** in `config.js`: list the chef's number(s) there and only
-  those signed-in phones can open the Chef view (no PIN prompt needed).
-  If the list is empty, the `chefPin` gate applies instead.
+  users to read — the public anon key alone is no longer enough.
+
+### Server-side chef checks (v3)
+
+Who counts as a chef is decided **by the database**, not the page:
+
+- Chefs are the phone numbers in the **`campfire_chefs`** table. Add one:
+  `insert into public.campfire_chefs (phone) values ('+1XXXXXXXXXX');`
+  (run in the SQL Editor; remove with a `delete`). The list itself is not
+  readable by clients.
+- **All writes go through validating database functions**
+  (`campfire_write` / `campfire_seed`) — direct table writes are disabled.
+  Campers can only add/change/cancel **their own** orders (matched to
+  their verified phone); only chefs can change menus, confirm/serve
+  orders, edit the camp-site directory, or create camp sites. A tampered
+  client gets a polite refusal from the server.
+- The Chef toggle in the UI asks the server (`campfire_is_chef`) — the
+  `chefPhones`/`chefPin` values in `config.js` are only legacy fallbacks
+  for a pre-v3 database or the offline demo.
 
 ### One-time Supabase setup for SMS sign-in
 
@@ -111,9 +143,9 @@ Note: Supabase's shortest code length is **6 digits** (configurable in the
 Phone settings; 4 is below its minimum).
 
 **Pilot-grade caveats, on purpose:**
-- Reads/writes now require a phone-verified sign-in, but any verified user
-  can see all orders and (by design of the single shared row) technically
-  write anything. Fine for a campground pilot; not for real money.
+- Any signed-in user can still *read* everything (all sites, all orders),
+  and campers can freely edit their own orders' fields. Writes are
+  validated server-side, but this is still a pilot, not a bank.
 - SMS sign-in proves possession of a phone number — good enough to know
   you're dealing with real people, not strong security.
 - Notifications appear when the app polls (in-app), they are not push

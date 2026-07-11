@@ -20,14 +20,12 @@ window.CAMPFIRE_CONFIG = {
   // can read/write the shared data — see README caveats.)
   supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9jcXR1amd4ZnRkYmp1dWhybHhsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MTE0ODcsImV4cCI6MjA5OTI4NzQ4N30.qMnB01ce2UjocD_00xf-_blEEb3M9PMU8h8eBMaydJY",
 
-  // Optional: require this PIN to open the Chef view, so campers
-  // can't wander into the kitchen controls. Empty = no PIN.
-  // (Ignored when chefPhones below is non-empty and sign-in is on.)
+  // NOTE: with the v3 database setup, WHO IS A CHEF is decided
+  // server-side by the campfire_chefs table (see supabase-setup.sql)
+  // — the database rejects chef-only writes from anyone else. The
+  // two settings below are only legacy fallbacks, used when the v3
+  // SQL hasn't been applied (chefPhones) or in device-only demo
+  // mode (chefPin).
   chefPin: "0711",
-
-  // Optional: lock the Chef view to specific verified phone numbers
-  // (E.164 format, e.g. "+15551234567"). When set, only these
-  // signed-in phones can open the kitchen — stronger than the PIN.
-  // These numbers are visible to anyone reading this file.
   chefPhones: ["+16175298470"],
 };

@@ -716,9 +716,47 @@ async function fetchRows(ids) {
   return res.json();
 }
 
+/* Writes go through the campfire_write / campfire_seed database
+ * functions, which enforce the chef rules SERVER-SIDE: campers can
+ * only touch their own orders; only chefs may change menus, the
+ * camp-site directory, or other people's orders. If the database is
+ * still on the pre-v3 setup script (no functions yet), we fall back
+ * to direct writes and nag about upgrading. */
+let rpcMode = null;      // null = unknown, true = validated RPCs, false = legacy direct writes
+let serverIsChef = null; // null = unknown/legacy, true/false = server verdict
+
+async function rpc(name, args) {
+  const res = await fetch(`${CFG.supabaseUrl.replace(/\/$/, "")}/rest/v1/rpc/${name}`, {
+    method: "POST",
+    headers: sbHeaders(),
+    body: JSON.stringify(args || {}),
+  });
+  if (res.status === 401) throw new Error("unauthorized");
+  if (res.status === 404) throw new Error("rpc-missing");
+  const j = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((j && (j.message || j.hint)) || `rpc ${res.status}`);
+  return j;
+}
+
+function noteLegacyMode() {
+  if (rpcMode === false) return;
+  rpcMode = false;
+  toast("⚠️ Server-side chef checks aren't active — run the latest supabase-setup.sql");
+}
+
 // Update one row, but only if nobody else wrote since we last read
-// it (version filter). Returns true on success.
+// it. Returns true on success, false on a version conflict.
 async function pushRow(id, expectedVersion, data) {
+  if (rpcMode !== false) {
+    try {
+      const v = await rpc("campfire_write", { p_id: id, p_expected_version: expectedVersion, p_data: data });
+      rpcMode = true;
+      return v > 0; // -1 → version conflict
+    } catch (e) {
+      if (e.message !== "rpc-missing") throw e;
+      noteLegacyMode();
+    }
+  }
   const res = await fetch(`${SB_URL}?id=eq.${id}&version=eq.${expectedVersion}`, {
     method: "PATCH",
     headers: { ...sbHeaders(), Prefer: "return=representation" },
@@ -731,12 +769,34 @@ async function pushRow(id, expectedVersion, data) {
 
 // Insert a row if it doesn't exist yet; races are harmless.
 async function insertRow(id, data) {
+  if (rpcMode !== false) {
+    try {
+      await rpc("campfire_seed", { p_id: id, p_data: data });
+      rpcMode = true;
+      return;
+    } catch (e) {
+      if (e.message !== "rpc-missing") throw e;
+      noteLegacyMode();
+    }
+  }
   const res = await fetch(SB_URL, {
     method: "POST",
     headers: { ...sbHeaders(), Prefer: "resolution=ignore-duplicates" },
     body: JSON.stringify({ id, version: 1, data }),
   });
   if (res.status === 401) throw new Error("unauthorized");
+}
+
+// Ask the database whether the signed-in phone is a chef.
+async function refreshChefStatus() {
+  try {
+    serverIsChef = (await rpc("campfire_is_chef", {})) === true;
+    rpcMode = true;
+  } catch (e) {
+    if (e.message === "unauthorized") throw e;
+    if (e.message === "rpc-missing") noteLegacyMode();
+    serverIsChef = null; // unknown → legacy client-side gating applies
+  }
 }
 
 function adoptDirRow(row) { directory = row.data; dirVersion = row.version; }
@@ -796,6 +856,7 @@ function startPolling() {
 
 function handleAuthLoss() {
   session = null;
+  serverIsChef = null;
   saveSession();
   if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
   renderLogin("Your session expired — sign in again to get back to the kitchen.");
@@ -824,6 +885,13 @@ async function commit(mutator) {
     toast("⚠️ The camp kitchen is busy — change not saved, please retry");
   } catch (e) {
     if (e.message === "unauthorized") { handleAuthLoss(); return false; }
+    if (/only the chef|own orders|sign in required|camp site/.test(e.message)) {
+      // the server-side validator refused the write
+      await remoteRefresh().catch(() => {}); // discard the local mutation
+      toast("⛔ " + e.message);
+      render();
+      return false;
+    }
     setSyncPill("offline");
     toast("⚠️ Can't reach the camp kitchen server — check your connection");
   }
@@ -852,6 +920,11 @@ async function commitDirectory(mutator) {
     toast("⚠️ The camp directory is busy — please retry");
   } catch (e) {
     if (e.message === "unauthorized") { handleAuthLoss(); return false; }
+    if (/only the chef|own orders|sign in required|camp site/.test(e.message)) {
+      await remoteRefresh().catch(() => {});
+      toast("⛔ " + e.message);
+      return false;
+    }
     setSyncPill("offline");
     toast("⚠️ Can't reach the camp kitchen server — check your connection");
   }
@@ -1155,10 +1228,16 @@ function notifList(list) {
 function setRole(role) {
   if (!state) return; // still on the sign-in screen
   if (role === "chef") {
-    const chefPhones = (CFG.chefPhones || []).map(normalizePhone);
-    if (REMOTE && session && chefPhones.length) {
-      // Kitchen is locked to specific verified phone numbers.
-      if (!chefPhones.includes(myId())) {
+    if (REMOTE && session && serverIsChef !== null) {
+      // The database's verdict (campfire_chefs table) is authoritative
+      // — and the server refuses chef-only writes regardless.
+      if (!serverIsChef) {
+        toast("Only the chef's phone can open the kitchen 👩‍🍳");
+        return;
+      }
+    } else if (REMOTE && session && (CFG.chefPhones || []).length) {
+      // Legacy fallback (pre-v3 database): client-side phone list.
+      if (!(CFG.chefPhones || []).map(normalizePhone).includes(myId())) {
         toast("Only the chef's phone can open the kitchen 👩‍🍳");
         return;
       }
@@ -1598,21 +1677,26 @@ function inviteLink(siteId) {
   return location.href.split(/[?#]/)[0] + "?site=" + siteId;
 }
 
+function inviteMessage(site) {
+  return `🏕️ You're invited to ${site.name}'s camp kitchen! Order breakfast from the chef here: ${inviteLink(site.id)}`;
+}
+
 function openInviteDialog(siteId) {
   const site = directory && directory.sites.find((s) => s.id === siteId);
   if (!site) return;
   const link = inviteLink(siteId);
-  const msg = `🏕️ You're invited to ${site.name}'s camp kitchen! Order breakfast from the chef here: ${link}`;
+  const msg = inviteMessage(site);
   const phones = site.phones || [];
   const dlg = $("#inviteDialog");
   dlg.innerHTML = `
     <h3>💬 Invite campers to ${esc(site.name)}</h3>
-    <div class="sub">Each button opens your Messages app with the invite pre-filled — just hit send. Campers sign in with their number and land right in this camp site.</div>
+    <div class="sub">Send invites automatically from the server, or tap a button to open your Messages app with the invite pre-filled. Campers sign in with their number and land right in this camp site.</div>
     <div class="field">
       <label>Invite link</label>
       <div class="invite-link-box" id="inviteLinkBox">${esc(link)}</div>
     </div>
     <div class="row" style="margin-bottom:12px">
+      ${phones.length ? `<button class="btn primary small" id="autoSendBtn" onclick="sendInvitesAuto(${site.id})">🚀 Text everyone automatically</button>` : ""}
       <button class="btn ghost small" onclick="copyInviteLink('${siteId}')">📋 Copy link</button>
       ${phones.length > 1 ? `<a class="btn green small" style="text-decoration:none" href="sms:${phones.join(",")}?&body=${encodeURIComponent(msg)}">💬 Text everyone</a>` : ""}
     </div>
@@ -1625,6 +1709,44 @@ function openInviteDialog(siteId) {
       <button class="btn primary" onclick="document.getElementById('inviteDialog').close()">Done</button>
     </div>`;
   dlg.showModal();
+}
+
+// Server-side invite sending via the `send-invites` Edge Function
+// (Twilio credentials live in Supabase secrets, not in this page).
+async function sendInvitesAuto(siteId) {
+  const site = directory && directory.sites.find((s) => s.id === siteId);
+  if (!site || !(site.phones || []).length || !session) return;
+  const btn = $("#autoSendBtn");
+  if (btn) { btn.disabled = true; btn.textContent = "Sending…"; }
+  try {
+    const res = await fetch(`${CFG.supabaseUrl.replace(/\/$/, "")}/functions/v1/send-invites`, {
+      method: "POST",
+      headers: {
+        apikey: CFG.supabaseAnonKey,
+        Authorization: `Bearer ${session.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ phones: site.phones, message: inviteMessage(site) }),
+    });
+    if (res.status === 404) {
+      toast("🚀 Auto-send isn't set up yet — deploy the send-invites Edge Function (see README) or use the tap-to-text buttons.");
+      return;
+    }
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      toast("⚠️ " + (j.error || `Invites failed to send (${res.status})`));
+      return;
+    }
+    const ok = (j.results || []).filter((r) => r.ok).length;
+    const bad = (j.results || []).length - ok;
+    toast(bad
+      ? `📨 ${ok} invite${ok !== 1 ? "s" : ""} sent, ${bad} failed — check the Twilio logs`
+      : `📨 All ${ok} invite${ok !== 1 ? "s" : ""} sent!`);
+  } catch (e) {
+    toast("⚠️ Couldn't reach the invite sender — check your connection");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "🚀 Text everyone automatically"; }
+  }
 }
 
 function copyInviteLink(siteId) {
@@ -1727,6 +1849,7 @@ async function onVerifyCode() {
 async function startApp() {
   $("#app").innerHTML = `<div class="empty">⛺ Connecting to the camp kitchen…</div>`;
   try {
+    await refreshChefStatus();
     await remoteInit();
     setSyncPill("ok");
     render();
