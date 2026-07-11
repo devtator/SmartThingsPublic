@@ -331,6 +331,39 @@
   }
   .name-bar input { max-width: 200px; }
   .name-bar .label { font-size: 0.86rem; font-weight: 700; }
+  .site-bar {
+    background: #eef4ee;
+    border: 1px solid #cfe0d2;
+    border-radius: var(--radius);
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 16px;
+  }
+  .site-bar .site-name { font-weight: 700; color: var(--pine-dark); }
+  .site-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-top: 1px dashed var(--line);
+    flex-wrap: wrap;
+  }
+  .site-row:first-of-type { border-top: none; }
+  .site-row .s-emoji { font-size: 1.6rem; }
+  .site-row .s-name { font-weight: 700; }
+  .site-row .s-meta { font-size: 0.78rem; color: var(--ink-soft); }
+  .invite-link-box {
+    font-family: ui-monospace, monospace;
+    font-size: 0.78rem;
+    background: var(--cream);
+    border: 1.5px dashed var(--line);
+    border-radius: 10px;
+    padding: 10px;
+    word-break: break-all;
+  }
   .toggle-avail { display: flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--ink-soft); cursor: pointer; }
   @media (max-width: 560px) {
     header h1 { font-size: 1.05rem; }
@@ -360,6 +393,8 @@
 <dialog id="orderDialog"></dialog>
 <dialog id="mealDialog"></dialog>
 <dialog id="rateDialog"></dialog>
+<dialog id="siteDialog"></dialog>
+<dialog id="inviteDialog"></dialog>
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
@@ -490,6 +525,20 @@ function seedData() {
   return { meals, orders, notifications, nextId: 100 };
 }
 
+// A brand-new camp site starts with an empty kitchen.
+function emptySiteData() {
+  return { meals: [], orders: [], notifications: [], nextId: 100 };
+}
+
+// The directory (row 0 in live sync) lists every camp site. Site 1
+// is always the seeded Demo Campground.
+function seedDirectory() {
+  return {
+    sites: [{ id: 1, name: "Demo Campground", emoji: "🏕️", phones: [], createdBy: "demo" }],
+    nextSiteId: 2,
+  };
+}
+
 /* ------------------------- persistence -------------------------
  * `state`  — the SHARED data (meals, orders, notifications).
  * `prefs`  — per-device data (current view, camper name); always
@@ -502,15 +551,28 @@ function seedData() {
  * -------------------------------------------------------------- */
 let state = null;
 let stateVersion = 0; // remote row version (live-sync mode)
+const DIR_ID = 0;     // the camp-site directory lives in row 0
+let directory = null;
+let dirVersion = 0;
 let prefs = loadPrefs();
 
 function loadPrefs() {
+  let p = null;
   try {
     const raw = localStorage.getItem(PREFS_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) p = JSON.parse(raw);
   } catch (e) { /* fall through */ }
   // In live-sync mode campers must type their real name first.
-  return { role: "camper", camperName: REMOTE ? "" : "Riley" };
+  if (!p) p = { role: "camper", camperName: REMOTE ? "" : "Riley" };
+  if (!p.siteId) p.siteId = 1;
+  // An invite link (?site=N) drops the user straight into that camp site.
+  const urlSite = parseInt(new URLSearchParams(location.search).get("site"), 10);
+  if (urlSite > 0) p.siteId = urlSite;
+  return p;
+}
+
+function currentSite() {
+  return directory && directory.sites.find((s) => s.id === prefs.siteId) || null;
 }
 function savePrefs() {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (e) { /* non-fatal */ }
@@ -646,56 +708,73 @@ function setSyncPill(mode) {
     : "🟢 Live sync";
 }
 
-async function remoteFetchRow() {
-  const res = await fetch(`${SB_URL}?id=eq.1&select=version,data`, { headers: sbHeaders() });
+async function fetchRows(ids) {
+  const res = await fetch(`${SB_URL}?id=in.(${ids.join(",")})&select=id,version,data`, { headers: sbHeaders() });
   if (res.status === 401) throw new Error("unauthorized");
   if (res.status === 404) throw new Error("table-missing"); // supabase-setup.sql not run yet
   if (!res.ok) throw new Error(`fetch ${res.status}`);
-  const rows = await res.json();
-  return rows[0] || null;
+  return res.json();
 }
 
-// Push the whole state, but only if nobody else wrote since we
-// last read (version filter). Returns true on success.
-async function remotePush() {
-  const res = await fetch(`${SB_URL}?id=eq.1&version=eq.${stateVersion}`, {
+// Update one row, but only if nobody else wrote since we last read
+// it (version filter). Returns true on success.
+async function pushRow(id, expectedVersion, data) {
+  const res = await fetch(`${SB_URL}?id=eq.${id}&version=eq.${expectedVersion}`, {
     method: "PATCH",
     headers: { ...sbHeaders(), Prefer: "return=representation" },
-    body: JSON.stringify({ version: stateVersion + 1, data: state }),
+    body: JSON.stringify({ version: expectedVersion + 1, data }),
   });
   if (res.status === 401) throw new Error("unauthorized");
   if (!res.ok) throw new Error(`push ${res.status}`);
-  const rows = await res.json();
-  if (rows.length === 0) return false; // version conflict
-  stateVersion += 1;
-  return true;
+  return (await res.json()).length > 0; // empty → version conflict
 }
 
+// Insert a row if it doesn't exist yet; races are harmless.
+async function insertRow(id, data) {
+  const res = await fetch(SB_URL, {
+    method: "POST",
+    headers: { ...sbHeaders(), Prefer: "resolution=ignore-duplicates" },
+    body: JSON.stringify({ id, version: 1, data }),
+  });
+  if (res.status === 401) throw new Error("unauthorized");
+}
+
+function adoptDirRow(row) { directory = row.data; dirVersion = row.version; }
+function adoptSiteRow(row) { state = row.data; stateVersion = row.version; }
+
 async function remoteInit() {
-  let row = await remoteFetchRow();
-  if (!row) {
-    // First client ever: seed the shared row. If two clients race,
-    // one POST fails and we just re-fetch.
-    await fetch(SB_URL, {
-      method: "POST",
-      headers: { ...sbHeaders(), Prefer: "resolution=ignore-duplicates" },
-      body: JSON.stringify({ id: 1, version: 1, data: seedData() }),
-    });
-    row = await remoteFetchRow();
-    if (!row) throw new Error("could not seed shared state");
+  let rows = await fetchRows([DIR_ID, prefs.siteId]);
+  let dir = rows.find((r) => r.id === DIR_ID);
+  if (!dir) {
+    // First client ever: create the directory and the demo campground.
+    // (Also migrates a pre-directory deployment: the old demo data in
+    // row 1 is kept because the insert ignores duplicates.)
+    await insertRow(DIR_ID, seedDirectory());
+    await insertRow(1, seedData());
+    rows = await fetchRows([DIR_ID, prefs.siteId]);
+    dir = rows.find((r) => r.id === DIR_ID);
+    if (!dir) throw new Error("could not seed shared state");
   }
-  state = row.data;
-  stateVersion = row.version;
+  adoptDirRow(dir);
+  if (!currentSite()) prefs.siteId = directory.sites[0].id; // stale ?site= link
+  let site = rows.find((r) => r.id === prefs.siteId);
+  if (!site) {
+    // Site is in the directory but its row is missing (creation race).
+    await insertRow(prefs.siteId, emptySiteData());
+    site = (await fetchRows([prefs.siteId]))[0];
+    if (!site) throw new Error("could not load camp site");
+  }
+  adoptSiteRow(site);
 }
 
 async function remoteRefresh() {
-  const row = await remoteFetchRow();
-  if (row && row.version !== stateVersion) {
-    state = row.data;
-    stateVersion = row.version;
-    return true;
-  }
-  return false;
+  const rows = await fetchRows([DIR_ID, prefs.siteId]);
+  let changed = false;
+  const dir = rows.find((r) => r.id === DIR_ID);
+  if (dir && dir.version !== dirVersion) { adoptDirRow(dir); changed = true; }
+  const site = rows.find((r) => r.id === prefs.siteId);
+  if (site && site.version !== stateVersion) { adoptSiteRow(site); changed = true; }
+  return changed;
 }
 
 const POLL_MS = 4000;
@@ -733,7 +812,8 @@ async function commit(mutator) {
     if (!(await ensureSession())) { handleAuthLoss(); return false; }
     for (let attempt = 0; attempt < 5; attempt++) {
       mutator(state);
-      if (await remotePush()) {
+      if (await pushRow(prefs.siteId, stateVersion, state)) {
+        stateVersion += 1;
         setSyncPill("ok");
         render();
         return true;
@@ -748,6 +828,33 @@ async function commit(mutator) {
     toast("⚠️ Can't reach the camp kitchen server — check your connection");
   }
   render();
+  return false;
+}
+
+/* ---- commitDirectory: same write path for the camp-site list ---- */
+async function commitDirectory(mutator) {
+  if (!REMOTE) {
+    mutator(directory);
+    render();
+    return true;
+  }
+  try {
+    if (!(await ensureSession())) { handleAuthLoss(); return false; }
+    for (let attempt = 0; attempt < 5; attempt++) {
+      mutator(directory);
+      if (await pushRow(DIR_ID, dirVersion, directory)) {
+        dirVersion += 1;
+        setSyncPill("ok");
+        return true;
+      }
+      await remoteRefresh();
+    }
+    toast("⚠️ The camp directory is busy — please retry");
+  } catch (e) {
+    if (e.message === "unauthorized") { handleAuthLoss(); return false; }
+    setSyncPill("offline");
+    toast("⚠️ Can't reach the camp kitchen server — check your connection");
+  }
   return false;
 }
 
@@ -797,9 +904,20 @@ function render() {
   const n = unreadCount();
   badge.hidden = n === 0;
   badge.textContent = n;
-  $("#app").innerHTML = prefs.role === "chef" ? chefView() : camperView();
+  $("#app").innerHTML = (REMOTE ? siteBar() : "") + (prefs.role === "chef" ? chefView() : camperView());
   savePrefs();
   if (!REMOTE) saveLocal();
+}
+
+function siteBar() {
+  const site = currentSite() || { id: prefs.siteId, name: "Camp Site", emoji: "⛺" };
+  return `
+    <div class="site-bar">
+      <span class="site-name">${site.emoji || "⛺"} ${esc(site.name)}</span>
+      <span class="spacer"></span>
+      ${prefs.role === "chef" ? `<button class="btn ghost small" onclick="openInviteDialog(${site.id})">💬 Invites</button>` : ""}
+      <button class="btn ghost small" onclick="renderSitePicker()">⛺ Switch camp site</button>
+    </div>`;
 }
 
 /* ========================= CAMPER VIEW ========================= */
@@ -964,7 +1082,7 @@ function chefView() {
     ${notifList(chefNotifs)}
 
     <div class="footer-tools">
-      <button class="btn ghost small" onclick="resetDemo()">↺ Reset demo data</button>
+      <button class="btn ghost small" onclick="resetDemo()">${prefs.siteId === 1 ? "↺ Reset demo data" : "🧹 Clear this camp site"}</button>
       ${REMOTE && session
         ? `<div class="account-line" style="justify-content:center;margin-top:10px">📱 ${esc(myPhoneLabel())} <button class="link-btn" onclick="signOut()">Sign out</button></div>`
         : ""}
@@ -1185,10 +1303,13 @@ function markNotifsRead() {
 }
 
 function resetDemo() {
-  if (!confirm("Reset all meals, orders, and notifications back to the sample data?")) return;
+  const isDemoSite = prefs.siteId === 1;
+  if (!confirm(isDemoSite
+    ? "Reset all meals, orders, and notifications back to the sample data?"
+    : "Clear this camp site's meals, orders, and notifications?")) return;
   commit((s) => {
-    Object.assign(s, seedData());
-  }).then((ok) => { if (ok) toast("Demo data reset"); });
+    Object.assign(s, isDemoSite ? seedData() : emptySiteData());
+  }).then((ok) => { if (ok) toast(isDemoSite ? "Demo data reset" : "Camp site cleared"); });
 }
 
 /* ----------------------- order dialog -------------------------- */
@@ -1383,6 +1504,136 @@ $("#app").addEventListener("change", (e) => {
   if (e.target.id === "camperName") render();
 });
 
+/* ----------------------- camp sites ----------------------------
+ * Every camp site has its own menu, orders, and notifications
+ * (its own row). The directory row lists them all; anyone can
+ * browse and open any site for now. */
+function renderSitePicker() {
+  if (!directory) return;
+  $("#app").innerHTML = `
+    <div class="section-title">⛺ Camp sites</div>
+    <p class="hint">Every camp site has its own menu and orders. Pick yours.</p>
+    <div class="card">
+      ${directory.sites.map((s) => `
+        <div class="site-row">
+          <span class="s-emoji">${s.emoji || "⛺"}</span>
+          <div>
+            <div class="s-name">${esc(s.name)}</div>
+            <div class="s-meta">${s.id === 1 ? "Sample data to play with" : `${(s.phones || []).length} camper${(s.phones || []).length === 1 ? "" : "s"} invited`}</div>
+          </div>
+          <span class="spacer"></span>
+          ${s.id === prefs.siteId
+            ? `<span class="status confirmed">You're here</span>`
+            : `<button class="btn green small" onclick="switchSite(${s.id})">Open</button>`}
+        </div>`).join("")}
+    </div>
+    <div class="row" style="margin-top:14px">
+      ${prefs.role === "chef" ? `<button class="btn primary" onclick="openSiteDialog()">＋ New camp site</button>` : ""}
+      <button class="btn ghost" onclick="render()">← Back</button>
+    </div>`;
+}
+
+async function switchSite(id) {
+  prefs.siteId = id;
+  savePrefs();
+  if (!REMOTE) { render(); return; }
+  $("#app").innerHTML = `<div class="empty">⛺ Heading over to camp…</div>`;
+  try {
+    let site = (await fetchRows([id]))[0];
+    if (!site) {
+      await insertRow(id, emptySiteData());
+      site = (await fetchRows([id]))[0];
+      if (!site) throw new Error("missing site row");
+    }
+    adoptSiteRow(site);
+    render();
+  } catch (e) {
+    if (e.message === "unauthorized") { handleAuthLoss(); return; }
+    setSyncPill("offline");
+    $("#app").innerHTML = `<div class="empty">⚠️ Couldn't load that camp site — check your connection and
+      <a href="javascript:location.reload()">reload</a>.</div>`;
+  }
+}
+
+function openSiteDialog() {
+  const dlg = $("#siteDialog");
+  dlg.innerHTML = `
+    <h3>⛺ New camp site</h3>
+    <div class="sub">Give your camp a name and list your campers' cell numbers — you'll text each of them an invite link to this site's kitchen.</div>
+    <div class="field"><label>Camp site name</label><input type="text" id="sName" placeholder="e.g. Lake View Loop, Site 14"></div>
+    <div class="field"><label>Emoji</label><input type="text" id="sEmoji" value="🏞️" maxlength="4"></div>
+    <div class="field">
+      <label>Camper cell numbers (one per line or comma-separated)</label>
+      <textarea id="sPhones" rows="4" placeholder="555-123-4567&#10;555-987-6543"></textarea>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('siteDialog').close()">Cancel</button>
+      <button class="btn primary" onclick="createSite()">Create camp site</button>
+    </div>`;
+  dlg.showModal();
+}
+
+async function createSite() {
+  const name = $("#sName").value.trim();
+  if (!name) { toast("Give the camp site a name"); return; }
+  const emoji = $("#sEmoji").value.trim() || "⛺";
+  const phones = $("#sPhones").value.split(/[\n,;]+/)
+    .map((t) => t.trim()).filter(Boolean).map(normalizePhone)
+    .filter((p) => p.replace(/\D/g, "").length >= 10);
+  const creator = myId();
+  let newId = null;
+  const ok = await commitDirectory((d) => {
+    newId = d.nextSiteId++;
+    d.sites.push({ id: newId, name, emoji, phones, createdBy: creator });
+  });
+  $("#siteDialog").close();
+  if (!ok || newId === null) return;
+  try { if (REMOTE) await insertRow(newId, emptySiteData()); } catch (e) { /* switchSite retries */ }
+  await switchSite(newId);
+  toast(`${emoji} ${name} is ready — set up the menu and send the invites!`);
+  if (phones.length) openInviteDialog(newId);
+}
+
+function inviteLink(siteId) {
+  return location.href.split(/[?#]/)[0] + "?site=" + siteId;
+}
+
+function openInviteDialog(siteId) {
+  const site = directory && directory.sites.find((s) => s.id === siteId);
+  if (!site) return;
+  const link = inviteLink(siteId);
+  const msg = `🏕️ You're invited to ${site.name}'s camp kitchen! Order breakfast from the chef here: ${link}`;
+  const phones = site.phones || [];
+  const dlg = $("#inviteDialog");
+  dlg.innerHTML = `
+    <h3>💬 Invite campers to ${esc(site.name)}</h3>
+    <div class="sub">Each button opens your Messages app with the invite pre-filled — just hit send. Campers sign in with their number and land right in this camp site.</div>
+    <div class="field">
+      <label>Invite link</label>
+      <div class="invite-link-box" id="inviteLinkBox">${esc(link)}</div>
+    </div>
+    <div class="row" style="margin-bottom:12px">
+      <button class="btn ghost small" onclick="copyInviteLink('${siteId}')">📋 Copy link</button>
+      ${phones.length > 1 ? `<a class="btn green small" style="text-decoration:none" href="sms:${phones.join(",")}?&body=${encodeURIComponent(msg)}">💬 Text everyone</a>` : ""}
+    </div>
+    ${phones.length ? `<div class="field"><label>Text one at a time</label>
+      <div class="slot-picker">
+        ${phones.map((p) => `<a class="btn ghost small" style="text-decoration:none" href="sms:${p}?&body=${encodeURIComponent(msg)}">💬 ${esc(p)}</a>`).join("")}
+      </div></div>`
+    : `<p class="hint">No camper numbers on this site yet — copy the link and share it however you like.</p>`}
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn primary" onclick="document.getElementById('inviteDialog').close()">Done</button>
+    </div>`;
+  dlg.showModal();
+}
+
+function copyInviteLink(siteId) {
+  const link = inviteLink(siteId);
+  (navigator.clipboard ? navigator.clipboard.writeText(link) : Promise.reject())
+    .then(() => toast("Invite link copied 📋"))
+    .catch(() => toast("Copy failed — long-press the link to copy it"));
+}
+
 /* -------------------- sign-in screens -------------------------- */
 let loginPhone = null;
 
@@ -1497,6 +1748,8 @@ async function startApp() {
 async function init() {
   setSyncPill("ok");
   if (!REMOTE) {
+    directory = seedDirectory();
+    prefs.siteId = 1; // device-only demo is single-site
     state = loadLocal();
     render();
     return;

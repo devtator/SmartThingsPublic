@@ -3,10 +3,11 @@
 -- (Dashboard → SQL Editor → New query → paste → Run).
 -- Safe to re-run: it drops and recreates its own policies.
 --
--- The app keeps all shared data (meals, orders, notifications) in a
--- single JSONB row and uses the `version` column for optimistic
--- concurrency: writers only succeed if the version they read is
--- still current, otherwise they re-fetch and re-apply.
+-- The app stores one JSONB row per camp site (row 0 is the directory
+-- of camp sites, row 1 is the Demo Campground, new sites get the next
+-- id) and uses the `version` column for optimistic concurrency:
+-- writers only succeed if the version they read is still current,
+-- otherwise they re-fetch and re-apply.
 --
 -- Access requires sign-in: users authenticate with their cell number
 -- via Supabase Auth SMS codes, and only the `authenticated` role can
@@ -34,6 +35,6 @@ drop policy if exists "campfire auth update" on public.campfire_state;
 create policy "campfire auth select" on public.campfire_state
   for select to authenticated using (true);
 create policy "campfire auth insert" on public.campfire_state
-  for insert to authenticated with check (id = 1);
+  for insert to authenticated with check (id >= 0);
 create policy "campfire auth update" on public.campfire_state
-  for update to authenticated using (id = 1) with check (id = 1);
+  for update to authenticated using (id >= 0) with check (id >= 0);

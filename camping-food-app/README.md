@@ -50,6 +50,30 @@ and pushes writes with optimistic concurrency (conflicting writes are retried
 against the latest state, so two campers ordering at once both get through).
 Per-device things — which view you're in, your camper name — stay local.
 
+## Camp sites
+
+Each **camp site** is its own kitchen: its own menu, orders, and
+notifications. The seeded breakfast data lives in the permanent
+**Demo Campground** site, so there's always something to play with.
+
+- The bar at the top shows the current camp site; **⛺ Switch camp site**
+  lists every site, and anyone can open any of them (no per-site access
+  limits yet — by design for now).
+- **Chefs create camp sites**: name, emoji, and the cell numbers of all
+  campers (one per line). Creating the site opens the **invite panel**.
+- **Invites are text messages with a join link** (`…?site=N`). Each button
+  in the invite panel opens the chef's own Messages app pre-filled with the
+  camper's number and the invite text — hit send and it's on its way. There
+  are also "Text everyone" and "Copy link" options, and the panel can be
+  reopened anytime via 💬 Invites in the site bar. A camper who taps the
+  link signs in with their number and lands directly in that camp site.
+- Invites come from the chef's own phone on purpose: sending them
+  server-side would require exposing SMS credentials from a static site.
+  If automatic sending becomes worth it, the upgrade path is a small
+  Supabase Edge Function holding the Twilio secrets.
+- Device-only demo mode is single-site (camp sites need the shared
+  backend).
+
 ## Phone sign-in (texted verification codes)
 
 In live-sync mode everyone — chef and campers — signs in with their cell
