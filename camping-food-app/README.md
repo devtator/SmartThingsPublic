@@ -115,8 +115,11 @@ magic link). Powered by Supabase Auth; no extra backend.
   notifications are keyed to it, so two campers named "Sam" can't collide
   or read each other's notifications. The name in the "Ordering as" bar is
   just the display name.
-- Sessions persist on the device and refresh automatically; there's a
-  **Sign out** link next to the (masked) phone number.
+- **A sign-in is good for 7 days per device**: sessions persist across
+  visits and refresh automatically in the background (a flaky connection
+  won't log anyone out — refresh just retries later). A week after signing
+  in, the app asks for a fresh code/link. There's also a **Sign out** link
+  next to the (masked) identity.
 - The database policies (see `supabase-setup.sql`) only allow signed-in
   users to read — the public anon key alone is no longer enough.
 

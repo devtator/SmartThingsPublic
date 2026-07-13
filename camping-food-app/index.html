@@ -709,10 +709,19 @@ const AUTH_KEY = "campfire-kitchen-auth-v1";
 const AUTH_URL = REMOTE ? `${CFG.supabaseUrl.replace(/\/$/, "")}/auth/v1` : null;
 let session = loadSession();
 
+// A sign-in is good for 7 days on a device: access tokens refresh
+// automatically in the background, and after a week the app asks
+// for a fresh code/link.
+const SESSION_MAX_MS = 7 * 24 * 60 * 60 * 1000;
+
 function loadSession() {
   try {
     const raw = localStorage.getItem(AUTH_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const s = JSON.parse(raw);
+      if (s && !s.signedInAt) s.signedInAt = Date.now(); // migrate older sessions
+      return s;
+    }
   } catch (e) { /* fall through */ }
   return null;
 }
@@ -742,11 +751,19 @@ function myIdLabel() {
 }
 
 async function authPost(path, body) {
-  const res = await fetch(`${AUTH_URL}${path}`, {
-    method: "POST",
-    headers: { apikey: CFG.supabaseAnonKey, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let res;
+  try {
+    res = await fetch(`${AUTH_URL}${path}`, {
+      method: "POST",
+      headers: { apikey: CFG.supabaseAnonKey, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (err) {
+    // couldn't reach the server at all — distinct from a rejection
+    const e = new Error("Can't reach the sign-in server — check your connection");
+    e.networkError = true;
+    throw e;
+  }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(json.msg || json.error_description || json.message || `sign-in error (${res.status})`);
@@ -759,6 +776,9 @@ function adoptSession(s) {
     access_token: s.access_token,
     refresh_token: s.refresh_token,
     expires_at: Math.floor(Date.now() / 1000) + (s.expires_in || 3600),
+    // token refreshes keep the original sign-in date; fresh sign-ins
+    // (session was null) start the 7-day clock now
+    signedInAt: (session && session.signedInAt) || Date.now(),
     user: { id: s.user.id, phone: s.user.phone || null, email: s.user.email || null },
   };
   saveSession();
@@ -840,11 +860,18 @@ async function refreshSessionUser() {
 // True if we hold a session that is (or could be refreshed to be) valid.
 async function ensureSession() {
   if (!session) return false;
+  // Hard cap: a week after signing in, verify again.
+  if (Date.now() - (session.signedInAt || 0) > SESSION_MAX_MS) {
+    session = null;
+    saveSession();
+    return false;
+  }
   if (session.expires_at - Math.floor(Date.now() / 1000) > 60) return true;
   try {
     adoptSession(await authPost("/token?grant_type=refresh_token", { refresh_token: session.refresh_token }));
     return true;
   } catch (e) {
+    if (e.networkError) return true; // transient outage — keep the session, retry later
     session = null;
     saveSession();
     return false;
@@ -1081,7 +1108,7 @@ function startPolling() {
   if (pollTimer) return;
   pollTimer = setInterval(async () => {
     try {
-      await ensureSession();
+      if (!(await ensureSession())) { handleAuthLoss(); return; }
       const changed = await remoteRefresh();
       setSyncPill("ok");
       if (changed) render();
@@ -2481,6 +2508,7 @@ async function init() {
         access_token: hash.tokens.access_token,
         refresh_token: hash.tokens.refresh_token,
         expires_at: Math.floor(Date.now() / 1000) + hash.tokens.expires_in,
+        signedInAt: Date.now(),
         user: { id: u.id, phone: u.phone || null, email: u.email || null },
       };
       saveSession();
