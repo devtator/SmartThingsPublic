@@ -438,6 +438,7 @@
 <dialog id="inviteDialog"></dialog>
 <dialog id="accountDialog"></dialog>
 <dialog id="noteDialog"></dialog>
+<dialog id="siteSettingsDialog"></dialog>
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
@@ -678,6 +679,46 @@ function loadPrefs() {
 
 function currentSite() {
   return directory && directory.sites.find((s) => s.id === prefs.siteId) || null;
+}
+
+/* --------------- per-site membership & chefs --------------------
+ * A site is visible only to its people: invited contacts, invite-
+ * link joiners (members), the site's chefs, and its creator. The
+ * Demo Campground (site 1) is open to everyone. Global chefs (the
+ * campfire_chefs table -> serverIsChef) see and run everything;
+ * site chefs get chef powers for their own site. All of this is
+ * enforced server-side too — the client checks are just UX. */
+function siteIdentitySet(site) {
+  const set = new Set();
+  const add = (v) => { if (v) set.add(String(v).startsWith("+") ? String(v) : String(v).toLowerCase()); };
+  (site.phones || []).forEach(add);
+  (site.emails || []).forEach(add);
+  (site.members || []).forEach(add);
+  (site.chefs || []).forEach(add);
+  add(site.createdBy);
+  return set;
+}
+
+function isMember(site) {
+  if (!site) return false;
+  if (site.id === 1) return true; // Demo Campground is open to all
+  if (serverIsChef === true) return true;
+  const set = siteIdentitySet(site);
+  return myIds().some((id) => set.has(id) || set.has(id.toLowerCase()));
+}
+
+function isSiteChef(site) {
+  if (!site) return false;
+  const mine = myIds().map((x) => x.toLowerCase());
+  const chefs = [...(site.chefs || []), ...(site.createdBy ? [site.createdBy] : [])]
+    .map((x) => String(x).toLowerCase());
+  return chefs.some((c) => mine.includes(c));
+}
+
+// May the signed-in user act as chef at the CURRENT site?
+function canChefHere() {
+  if (!REMOTE) return true; // device demo: the PIN flow governs
+  return serverIsChef === true || isSiteChef(currentSite());
 }
 function savePrefs() {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch (e) { /* non-fatal */ }
@@ -1084,10 +1125,31 @@ async function remoteInit() {
     if (!dir) throw new Error("could not seed shared state");
   }
   adoptDirRow(dir);
-  if (!currentSite()) prefs.siteId = directory.sites[0].id; // stale ?site= link
+  if (!currentSite()) prefs.siteId = 1; // stale ?site= link -> Demo Campground
+
+  // Membership: opening a site's link is the ticket in — if the
+  // signed-in user isn't a member yet, enroll them. (Contacts and
+  // chefs are members already; this covers link-joiners.)
+  const target = currentSite();
+  if (target && target.id !== 1 && !isMember(target)) {
+    try {
+      await rpc("campfire_join", { p_site_id: target.id });
+      const d2 = (await fetchRows([DIR_ID])).find((r) => r.id === DIR_ID);
+      if (d2) adoptDirRow(d2);
+    } catch (e) {
+      if (e.message === "unauthorized") throw e;
+      if (e.message === "rpc-missing") noteLegacyMode(); // pre-v6 DB: open model
+      else prefs.siteId = 1; // couldn't join -> land on the demo site
+    }
+  }
+
   let site = rows.find((r) => r.id === prefs.siteId);
   if (!site) {
-    // Site is in the directory but its row is missing (creation race).
+    // Row missing from the first fetch: either a creation race, or
+    // membership only just granted (reads were filtered until now).
+    site = (await fetchRows([prefs.siteId]))[0];
+  }
+  if (!site) {
     await insertRow(prefs.siteId, emptySiteData());
     site = (await fetchRows([prefs.siteId]))[0];
     if (!site) throw new Error("could not load camp site");
@@ -1275,6 +1337,10 @@ function unreadCount() {
 
 /* --------------------------- render ---------------------------- */
 function render() {
+  // Chef role is per-site now: demote when this site isn't theirs.
+  if (REMOTE && session && state && prefs.role === "chef" && serverIsChef !== null && !canChefHere()) {
+    prefs.role = "camper";
+  }
   $("#roleChef").classList.toggle("active", prefs.role === "chef");
   $("#roleCamper").classList.toggle("active", prefs.role === "camper");
   const badge = $("#bellBadge");
@@ -1293,6 +1359,7 @@ function siteBar() {
       <span class="site-name">${site.emoji || "⛺"} ${esc(site.name)}</span>
       <span class="spacer"></span>
       ${prefs.role === "chef" ? `<button class="btn ghost small" onclick="openInviteDialog(${site.id})">💬 Invites</button>` : ""}
+      ${prefs.role === "chef" && REMOTE && site.id !== 1 ? `<button class="btn ghost small" onclick="openSiteSettings()">⚙️ Site settings</button>` : ""}
       <button class="btn ghost small" onclick="renderSitePicker()">⛺ Switch camp site</button>
     </div>`;
 }
@@ -1598,13 +1665,13 @@ function setRole(role) {
   if (!state) return; // still on the sign-in screen
   if (role === "chef") {
     if (REMOTE && session && serverIsChef !== null) {
-      // The database's verdict (campfire_chefs table) is authoritative
-      // — and the server refuses chef-only writes regardless.
-      if (!serverIsChef) {
-        toast("Only the chef's phone can open the kitchen 👩‍🍳");
+      // Global chefs run every site; site chefs only their own. The
+      // server refuses chef-only writes regardless.
+      if (!canChefHere()) {
+        toast("You're not a chef at this camp site 👩‍🍳");
         return;
       }
-    } else if (REMOTE && session && (CFG.chefPhones || []).length) {
+    } else if (REMOTE && session && (CFG.chefPhones || []).length && !isSiteChef(currentSite())) {
       // Legacy fallback (pre-v4 database): client-side list of chef
       // phones and/or emails.
       const chefIds = (CFG.chefPhones || []).map((c) =>
@@ -2139,20 +2206,24 @@ $("#app").addEventListener("change", (e) => {
  * browse and open any site for now. */
 function renderSitePicker() {
   if (!directory) return;
+  // You only see your own camps (plus the open demo); global chefs see all.
+  const visible = directory.sites.filter((x) => !REMOTE || isMember(x));
+  const canCreate = REMOTE ? serverIsChef === true || (serverIsChef === null && prefs.role === "chef") : prefs.role === "chef";
   $("#app").innerHTML = `
     <div class="section-title">⛺ Camp sites</div>
-    <p class="hint">Every camp site has its own menu and orders. Pick yours.</p>
+    <p class="hint">Every camp site has its own menu and orders — you see the camps you belong to. Pick yours.</p>
     <div class="card">
-      ${directory.sites.map((s) => `
+      ${visible.map((s) => `
         <div class="site-row">
           <span class="s-emoji">${s.emoji || "⛺"}</span>
           <div>
             <div class="s-name">${esc(s.name)}</div>
-            <div class="s-meta">${s.id === 1 ? "Sample data to play with" : (() => {
-              const n = (s.phones || []).length + (s.emails || []).length;
-              return `${n} camper${n === 1 ? "" : "s"} invited`;
+            <div class="s-meta">${s.id === 1 ? "Sample data to play with — open to everyone" : (() => {
+              const n = (s.phones || []).length + (s.emails || []).length + (s.members || []).length;
+              return `${n} camper${n === 1 ? "" : "s"}`;
             })()}</div>
           </div>
+          ${isSiteChef(s) ? `<span class="chip">👩‍🍳 you're a chef here</span>` : ""}
           <span class="spacer"></span>
           ${s.id === prefs.siteId
             ? `<span class="status confirmed">You're here</span>`
@@ -2160,12 +2231,19 @@ function renderSitePicker() {
         </div>`).join("")}
     </div>
     <div class="row" style="margin-top:14px">
-      ${prefs.role === "chef" ? `<button class="btn primary" onclick="openSiteDialog()">＋ New camp site</button>` : ""}
+      ${canCreate ? `<button class="btn primary" onclick="openSiteDialog()">＋ New camp site</button>` : ""}
       <button class="btn ghost" onclick="render()">← Back</button>
     </div>`;
 }
 
 async function switchSite(id) {
+  if (REMOTE) {
+    const site = directory && directory.sites.find((x) => x.id === id);
+    if (!site || !isMember(site)) {
+      toast("⛺ That camp site is invite-only — ask its chef for an invite link");
+      return;
+    }
+  }
   prefs.siteId = id;
   savePrefs();
   if (!REMOTE) { render(); return; }
@@ -2198,6 +2276,10 @@ function openSiteDialog() {
       <label>Camper cell numbers and/or emails (one per line or comma-separated)</label>
       <textarea id="sPhones" rows="4" placeholder="555-123-4567&#10;sam@example.com&#10;555-987-6543"></textarea>
     </div>
+    <div class="field">
+      <label>Co-chefs (optional) — phone or email; you're a chef automatically</label>
+      <textarea id="sChefs" rows="2" placeholder="555-222-3333&#10;alex@example.com"></textarea>
+    </div>
     <div class="row" style="justify-content:flex-end">
       <button class="btn ghost" onclick="document.getElementById('siteDialog').close()">Cancel</button>
       <button class="btn primary" onclick="createSite()">Create camp site</button>
@@ -2206,19 +2288,28 @@ function openSiteDialog() {
   dlg.showModal();
 }
 
+// "one per line or comma-separated" phone/email box -> {phones, emails}
+function parseContacts(raw) {
+  const tokens = String(raw || "").split(/[\n,;]+/).map((t) => t.trim()).filter(Boolean);
+  return {
+    emails: [...new Set(tokens.filter(isEmail).map((e) => e.toLowerCase()))],
+    phones: [...new Set(tokens.filter((t) => !isEmail(t)).map(normalizePhone)
+      .filter((p) => p.replace(/\D/g, "").length >= 10))],
+  };
+}
+
 async function createSite() {
   const name = $("#sName").value.trim();
   if (!name) { toast("Give the camp site a name"); return; }
   const emoji = $("#sEmoji").value.trim() || "⛺";
-  const tokens = $("#sPhones").value.split(/[\n,;]+/).map((t) => t.trim()).filter(Boolean);
-  const emails = tokens.filter(isEmail).map((e) => e.toLowerCase());
-  const phones = tokens.filter((t) => !isEmail(t)).map(normalizePhone)
-    .filter((p) => p.replace(/\D/g, "").length >= 10);
+  const { phones, emails } = parseContacts($("#sPhones").value);
+  const chefC = parseContacts($("#sChefs") ? $("#sChefs").value : "");
+  const chefs = [...chefC.phones, ...chefC.emails];
   const creator = myId();
   let newId = null;
   const ok = await commitDirectory((d) => {
     newId = d.nextSiteId++;
-    d.sites.push({ id: newId, name, emoji, phones, emails, createdBy: creator });
+    d.sites.push({ id: newId, name, emoji, phones, emails, chefs, members: [], createdBy: creator });
   });
   $("#siteDialog").close();
   if (!ok || newId === null) return;
@@ -2321,8 +2412,15 @@ async function sendInvitesAuto(siteId) {
  * on file, so they get the text). */
 function siteAudience(kind) {
   const site = REMOTE ? currentSite() : null;
-  const invitedEmails = [...new Set(((site && site.emails) || []).map((e) => e.toLowerCase()))];
-  const invitedPhones = [...new Set((site && site.phones) || [])];
+  const members = (site && site.members) || []; // invite-link joiners
+  const invitedEmails = [...new Set([
+    ...((site && site.emails) || []),
+    ...members.filter((m) => String(m).includes("@")),
+  ].map((e) => String(e).toLowerCase()))];
+  const invitedPhones = [...new Set([
+    ...((site && site.phones) || []),
+    ...members.filter((m) => String(m).startsWith("+")),
+  ])];
   const ordererIds = [...new Set(state.orders.map((o) => o.camperId).filter(Boolean))];
   const orderedEmails = ordererIds.filter((id) => id.includes("@"));
   const orderedPhones = ordererIds.filter((id) => id.startsWith("+"));
@@ -2430,6 +2528,50 @@ async function sendChefNote() {
   if (ok) {
     $("#noteDialog").close();
     toast(`📣 Note sent${delivery}`);
+  }
+}
+
+/* -------------------- site settings (chefs) ---------------------
+ * Site chefs (and global chefs) can edit a site's contact list and
+ * its chef list after creation. Server-validated: site chefs may
+ * only touch their own site's entry. */
+function openSiteSettings() {
+  const site = currentSite();
+  if (!site || site.id === 1) return;
+  const dlg = $("#siteSettingsDialog");
+  dlg.innerHTML = `
+    <h3>⚙️ ${esc(site.name)} settings</h3>
+    <div class="sub">Update who's invited and who runs the kitchen. New contacts become members; use 💬 Invites to send them the link.</div>
+    <div class="field">
+      <label>Camper cell numbers and/or emails (one per line)</label>
+      <textarea id="ssContacts" rows="4">${esc([...(site.phones || []), ...(site.emails || [])].join("\n"))}</textarea>
+    </div>
+    <div class="field">
+      <label>Site chefs — phone or email (the site's creator is always a chef)</label>
+      <textarea id="ssChefs" rows="2">${esc((site.chefs || []).join("\n"))}</textarea>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('siteSettingsDialog').close()">Cancel</button>
+      <button class="btn green" onclick="saveSiteSettings(${site.id})">Save</button>
+    </div>`;
+  dlg.showModal();
+}
+
+async function saveSiteSettings(siteId) {
+  const { phones, emails } = parseContacts($("#ssContacts").value);
+  const chefC = parseContacts($("#ssChefs").value);
+  const chefs = [...chefC.phones, ...chefC.emails];
+  const ok = await commitDirectory((d) => {
+    const s2 = d.sites.find((x) => x.id === siteId);
+    if (!s2) return;
+    s2.phones = phones;
+    s2.emails = emails;
+    s2.chefs = chefs;
+  });
+  $("#siteSettingsDialog").close();
+  if (ok) {
+    toast("⚙️ Camp site updated");
+    render();
   }
 }
 

@@ -1,10 +1,20 @@
--- Campfire Kitchen database setup (v5).
+-- Campfire Kitchen database setup (v6).
 -- v4: users may sign in with a phone number OR an email (or link
 -- both to one account) — chef checks and order ownership accept
 -- either identity.
 -- v5: campers also can't touch the day-cycle settings — order
 -- history, the current day, the cutoff time, or the open/closed
 -- override are chef-only.
+-- v6: PER-SITE MEMBERSHIP & CHEFS.
+--  * A camp site's data is readable only by its members: invited
+--    contacts, link-joiners (campfire_join), the site's chefs, and
+--    global chefs. The directory (row 0) and the Demo Campground
+--    (row 1) stay readable by all signed-in users.
+--  * Each site may list multiple site chefs (its `chefs` array,
+--    plus its creator implicitly). Site chefs have full chef powers
+--    for THEIR site's row, and may edit their own site's directory
+--    entry (contacts/chefs). Only global chefs (campfire_chefs)
+--    create sites or touch other sites' entries.
 -- Run this in your Supabase project's SQL editor
 -- (Dashboard → SQL Editor → New query → paste → Run).
 -- Safe to re-run: it drops and recreates its own policies/functions.
@@ -44,9 +54,9 @@ insert into public.campfire_chefs (phone) values
 on conflict do nothing;
 
 -- ------------------------------------------------------------------
--- Policies: signed-in users can READ everything. All writes must go
--- through the functions below, so the old write policies are dropped
--- and not recreated.
+-- Policies: signed-in users can read the directory and the Demo
+-- Campground; other site rows are member-only. All writes go through
+-- the functions below.
 drop policy if exists "campfire anon select"  on public.campfire_state;
 drop policy if exists "campfire anon insert"  on public.campfire_state;
 drop policy if exists "campfire anon update"  on public.campfire_state;
@@ -54,8 +64,8 @@ drop policy if exists "campfire auth select"  on public.campfire_state;
 drop policy if exists "campfire auth insert"  on public.campfire_state;
 drop policy if exists "campfire auth update"  on public.campfire_state;
 
-create policy "campfire auth select" on public.campfire_state
-  for select to authenticated using (true);
+-- (The select policy itself is created at the END of this file — it
+-- depends on the helper functions defined below.)
 
 -- ------------------------------------------------------------------
 -- Helpers
@@ -79,6 +89,7 @@ drop function if exists public.jwt_phone();
 
 -- The campfire_chefs.phone column holds either a phone (+E.164) or
 -- a lowercase email — whichever identity the chef signs in with.
+-- These are GLOBAL chefs: full powers on every camp site.
 create or replace function public.campfire_is_chef()
 returns boolean
 language sql stable security definer set search_path = public
@@ -86,6 +97,107 @@ as $$
   select exists (
     select 1 from campfire_chefs c where c.phone = any (public.jwt_ids())
   );
+$$;
+
+-- The caller is a SITE CHEF of the given site: listed in the site's
+-- `chefs` array, or its creator.
+create or replace function public.campfire_is_site_chef(p_site_id integer)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from campfire_state d,
+         jsonb_array_elements(coalesce(d.data->'sites', '[]'::jsonb)) s
+    where d.id = 0
+      and (s->>'id')::int = p_site_id
+      and (
+        lower(coalesce(s->>'createdBy', '')) in (select lower(x) from unnest(public.jwt_ids()) x)
+        or exists (
+          select 1 from jsonb_array_elements_text(coalesce(s->'chefs', '[]'::jsonb)) c
+          where lower(c) in (select lower(x) from unnest(public.jwt_ids()) x)
+        )
+      )
+  );
+$$;
+
+-- The caller is a MEMBER of the given site: an invited contact
+-- (phones/emails), a link-joiner (members), a site chef, or the
+-- creator.
+create or replace function public.campfire_is_member(p_site_id integer)
+returns boolean
+language sql stable security definer set search_path = public
+as $$
+  select exists (
+    select 1
+    from campfire_state d,
+         jsonb_array_elements(coalesce(d.data->'sites', '[]'::jsonb)) s
+    where d.id = 0
+      and (s->>'id')::int = p_site_id
+      and exists (
+        select 1
+        from (
+          select jsonb_array_elements_text(coalesce(s->'phones', '[]'::jsonb)) as ident
+          union all select jsonb_array_elements_text(coalesce(s->'emails', '[]'::jsonb))
+          union all select jsonb_array_elements_text(coalesce(s->'members', '[]'::jsonb))
+          union all select jsonb_array_elements_text(coalesce(s->'chefs', '[]'::jsonb))
+          union all select coalesce(s->>'createdBy', '')
+        ) ids
+        where lower(ids.ident) in (select lower(x) from unnest(public.jwt_ids()) x)
+      )
+  );
+$$;
+
+-- campfire_join: enroll the signed-in user as a member of a camp
+-- site. Called by the app when someone arrives via an invite link
+-- (?site=N) — the link acts as the ticket in.
+create or replace function public.campfire_join(p_site_id integer)
+returns void
+language plpgsql security definer set search_path = public
+as $$
+declare
+  v_dir   campfire_state%rowtype;
+  v_ids   text[] := public.jwt_ids();
+  v_sites jsonb;
+  v_site  jsonb;
+  v_members jsonb;
+  v_idx   integer;
+  v_changed boolean := false;
+  v_id    text;
+begin
+  if auth.role() is distinct from 'authenticated' then
+    raise exception 'sign in required';
+  end if;
+  select * into v_dir from campfire_state where id = 0 for update;
+  if not found then
+    raise exception 'no camp directory yet';
+  end if;
+  v_sites := coalesce(v_dir.data->'sites', '[]'::jsonb);
+  select (t.i - 1)::integer into v_idx
+  from jsonb_array_elements(v_sites) with ordinality t(s, i)
+  where (t.s->>'id')::int = p_site_id;
+  if v_idx is null then
+    raise exception 'no such camp site';
+  end if;
+  v_site := v_sites->v_idx;
+  v_members := coalesce(v_site->'members', '[]'::jsonb);
+  foreach v_id in array v_ids loop
+    if not exists (
+      select 1 from jsonb_array_elements_text(v_members) m where lower(m) = lower(v_id)
+    ) then
+      v_members := v_members || to_jsonb(v_id);
+      v_changed := true;
+    end if;
+  end loop;
+  if v_changed then
+    v_site := jsonb_set(v_site, '{members}', v_members);
+    v_sites := jsonb_set(v_sites, array[v_idx::text], v_site);
+    update campfire_state
+       set version = version + 1,
+           data = jsonb_set(data, '{sites}', v_sites)
+     where id = 0;
+  end if;
+end;
 $$;
 
 -- ------------------------------------------------------------------
@@ -137,7 +249,8 @@ language plpgsql security definer set search_path = public
 as $$
 declare
   v_ids  text[]  := public.jwt_ids();
-  v_chef boolean := public.campfire_is_chef();
+  v_global_chef boolean := public.campfire_is_chef();
+  v_chef boolean;
   v_old   campfire_state%rowtype;
 begin
   if auth.role() is distinct from 'authenticated' then
@@ -146,6 +259,9 @@ begin
   if p_id is null or p_id < 0 or p_data is null then
     raise exception 'bad request';
   end if;
+
+  -- Site chefs get full chef powers for their own site's row.
+  v_chef := v_global_chef or (p_id > 0 and public.campfire_is_site_chef(p_id));
 
   select * into v_old from campfire_state where id = p_id for update;
   if not found then
@@ -157,7 +273,31 @@ begin
 
   if not v_chef then
     if p_id = 0 then
-      raise exception 'only the chef can change the camp site list';
+      -- Site chefs may edit the directory, but only their own
+      -- site's entry (contacts/chefs), and may not add or renumber
+      -- sites.
+      if coalesce(v_old.data->'nextSiteId', '0'::jsonb) is distinct from coalesce(p_data->'nextSiteId', '0'::jsonb)
+         or exists (
+           with olds as (
+             select (s->>'id')::int as id, s from jsonb_array_elements(coalesce(v_old.data->'sites', '[]'::jsonb)) s
+           ),
+           news as (
+             select (s->>'id')::int as id, s from jsonb_array_elements(coalesce(p_data->'sites', '[]'::jsonb)) s
+           ),
+           joined as (
+             select coalesce(o.id, n.id) as id, o.s as os, n.s as ns
+             from olds o full outer join news n using (id)
+           )
+           select 1 from joined
+           where os is distinct from ns
+             and not public.campfire_is_site_chef(id)
+         ) then
+        raise exception 'only the chef can change the camp site list';
+      end if;
+      update campfire_state
+         set version = v_old.version + 1, data = p_data
+       where id = 0;
+      return v_old.version + 1;
     end if;
     if (v_old.data->'meals') is distinct from (p_data->'meals') then
       raise exception 'only the chef can change the menu';
@@ -201,8 +341,20 @@ $$;
 -- ------------------------------------------------------------------
 -- Only signed-in users may call the functions.
 revoke all on function public.campfire_is_chef() from public, anon;
+revoke all on function public.campfire_is_site_chef(integer) from public, anon;
+revoke all on function public.campfire_is_member(integer) from public, anon;
+revoke all on function public.campfire_join(integer) from public, anon;
 revoke all on function public.campfire_seed(integer, jsonb) from public, anon;
 revoke all on function public.campfire_write(integer, bigint, jsonb) from public, anon;
 grant execute on function public.campfire_is_chef() to authenticated;
 grant execute on function public.campfire_seed(integer, jsonb) to authenticated;
 grant execute on function public.campfire_write(integer, bigint, jsonb) to authenticated;
+grant execute on function public.campfire_is_site_chef(integer) to authenticated;
+grant execute on function public.campfire_is_member(integer) to authenticated;
+grant execute on function public.campfire_join(integer) to authenticated;
+
+-- ------------------------------------------------------------------
+-- Member-only reads (created last: it uses the functions above).
+create policy "campfire auth select" on public.campfire_state
+  for select to authenticated
+  using (id <= 1 or public.campfire_is_chef() or public.campfire_is_member(id));

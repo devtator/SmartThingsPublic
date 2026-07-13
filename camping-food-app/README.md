@@ -56,9 +56,20 @@ Each **camp site** is its own kitchen: its own menu, orders, and
 notifications. The seeded breakfast data lives in the permanent
 **Demo Campground** site, so there's always something to play with.
 
-- The bar at the top shows the current camp site; **⛺ Switch camp site**
-  lists every site, and anyone can open any of them (no per-site access
-  limits yet — by design for now).
+- **Camp sites are members-only.** The picker shows the camps you belong
+  to: you're a member if you were invited (phone/email on the contact
+  list), arrived via the site's invite link (auto-enrolled — the link is
+  the ticket in), or are one of its chefs. Non-members can't open a site,
+  and its data is unreadable to them at the database level. The **Demo
+  Campground stays open to everyone**.
+- **Each site can have multiple chefs.** Global chefs (the
+  `campfire_chefs` table) see and run every site. Additionally, a site
+  can name **site chefs** — set at creation ("Co-chefs") or later via
+  **⚙️ Site settings** (which also edits the contact list); the creator
+  is always implicitly a chef. Site chefs get full chef powers for their
+  site only — menu, orders, day cycle, invites, notes — enforced
+  server-side, and the Chef view automatically closes when they visit a
+  site that isn't theirs. Only global chefs create new camp sites.
 - **Chefs create camp sites**: name, emoji, and the cell numbers and/or
   emails of all campers (one per line). Creating the site opens the
   **invite panel**, which sends the welcome note by text or email.

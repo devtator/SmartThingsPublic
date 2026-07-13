@@ -116,8 +116,12 @@ Deno.serve(async (req) => {
     const ordered = new Set(
       ((d.orders ?? []) as Record<string, unknown>[]).map((o) => String(o.camperId ?? "").toLowerCase()),
     );
-    const emails = ((site.emails ?? []) as string[]).filter((e) => !ordered.has(e.toLowerCase()));
-    const phones = ((site.phones ?? []) as string[]).filter((p) => !ordered.has(p.toLowerCase()));
+    const members = (site.members ?? []) as string[]; // invite-link joiners
+    const allEmails = [...new Set([...(site.emails ?? []) as string[], ...members.filter((m) => m.includes("@"))]
+      .map((e) => e.toLowerCase()))];
+    const allPhones = [...new Set([...(site.phones ?? []) as string[], ...members.filter((m) => m.startsWith("+"))])];
+    const emails = allEmails.filter((e) => !ordered.has(e));
+    const phones = allPhones.filter((p) => !ordered.has(p.toLowerCase()));
 
     const link = siteUrl ? `${siteUrl}/?site=${site.id}` : "";
     const label = cutoffLabel(String(d.cutoffTime));
