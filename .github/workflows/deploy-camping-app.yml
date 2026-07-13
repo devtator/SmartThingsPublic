@@ -1,9 +1,12 @@
 name: Deploy Campfire Kitchen to GitHub Pages
 
+# Deploys from master only. (The development branch used to be a
+# trigger too, but its runs are rejected by the github-pages
+# environment protection and, via the shared concurrency group,
+# could cancel the real master deploy.)
 on:
   push:
     branches:
-      - claude/camping-food-ordering-app-djl0bi
       - master
     paths:
       - "camping-food-app/**"
