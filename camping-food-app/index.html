@@ -437,6 +437,7 @@
 <dialog id="siteDialog"></dialog>
 <dialog id="inviteDialog"></dialog>
 <dialog id="accountDialog"></dialog>
+<dialog id="noteDialog"></dialog>
 <div class="toast" id="toast"></div>
 
 <script src="config.js"></script>
@@ -609,7 +610,7 @@ function seedData() {
 
   return {
     meals, orders, notifications, history,
-    day: { startedAt: Date.now(), label: "Today" },
+    day: { startedAt: Date.now(), label: "Today", tzOffsetMin: new Date().getTimezoneOffset() },
     cutoffTime: "20:00", orderingOverride: null,
     nextId: 100,
   };
@@ -619,7 +620,7 @@ function seedData() {
 function emptySiteData() {
   return {
     meals: [], orders: [], notifications: [], history: [],
-    day: { startedAt: Date.now(), label: "Today" },
+    day: { startedAt: Date.now(), label: "Today", tzOffsetMin: new Date().getTimezoneOffset() },
     cutoffTime: "20:00", orderingOverride: null,
     nextId: 100,
   };
@@ -1418,6 +1419,7 @@ function chefView() {
           ? `<button class="btn green small" onclick="setOrderingOverride('open')">🔓 Reopen ordering</button>`
           : `<button class="btn ghost small" onclick="setOrderingOverride('closed')">🔒 Close ordering now</button>`}
         <button class="btn primary small" onclick="startNewMorning()">🌅 Wrap up breakfast &amp; open tomorrow</button>
+        <button class="btn ghost small" onclick="openNoteDialog()">📣 Message campers</button>
       </div>
     </div>
 
@@ -1669,6 +1671,7 @@ function setCutoff(value) {
     ensureDayFields(s);
     s.cutoffTime = value;
     s.orderingOverride = null; // a new cutoff clears any manual open/close
+    s.day.tzOffsetMin = new Date().getTimezoneOffset(); // reminders need the chef's timezone
   }).then((ok) => {
     if (ok) toast(value ? `⏰ Orders for tomorrow now close at ${cutoffLabel(value)}` : "⏰ Cutoff removed — ordering stays open");
   });
@@ -1712,7 +1715,7 @@ function startNewMorning() {
     s.orders = [];
     s.notifications = [];
     s.orderingOverride = null;
-    s.day = { startedAt, label: newLabel };
+    s.day = { startedAt, label: newLabel, tzOffsetMin: new Date().getTimezoneOffset() };
     notify("all", "🌅 The camp kitchen is taking orders for tomorrow's breakfast — get yours in before the cutoff!");
   }).then((ok) => {
     if (ok) toast(`🌅 Breakfast wrapped up — taking orders for tomorrow${archived ? ` (${archived} order${archived === 1 ? "" : "s"} archived)` : ""}`);
@@ -2306,6 +2309,125 @@ async function sendInvitesAuto(siteId) {
     toast("⚠️ Couldn't reach the invite sender — check your connection");
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = "🚀 Send to everyone automatically"; }
+  }
+}
+
+/* ------------- chef broadcast note to the campers ----------------
+ * Audiences: everyone, those who ordered (today's orders), or those
+ * who haven't. Delivered in-app, plus email when we have one and
+ * text message otherwise (invited-by-phone contacts have no email
+ * on file, so they get the text). */
+function siteAudience(kind) {
+  const site = REMOTE ? currentSite() : null;
+  const invitedEmails = [...new Set(((site && site.emails) || []).map((e) => e.toLowerCase()))];
+  const invitedPhones = [...new Set((site && site.phones) || [])];
+  const ordererIds = [...new Set(state.orders.map((o) => o.camperId).filter(Boolean))];
+  const orderedEmails = ordererIds.filter((id) => id.includes("@"));
+  const orderedPhones = ordererIds.filter((id) => id.startsWith("+"));
+  if (kind === "ordered") {
+    return { emails: orderedEmails, phones: orderedPhones, ids: ordererIds };
+  }
+  if (kind === "not-ordered") {
+    const emails = invitedEmails.filter((e) => !orderedEmails.includes(e));
+    const phones = invitedPhones.filter((p) => !orderedPhones.includes(p));
+    return { emails, phones, ids: [...emails, ...phones] };
+  }
+  return {
+    emails: [...new Set([...invitedEmails, ...orderedEmails])],
+    phones: [...new Set([...invitedPhones, ...orderedPhones])],
+    ids: null, // null → in-app note goes to "all"
+  };
+}
+
+function audienceCount(kind) {
+  const a = siteAudience(kind);
+  if (kind === "ordered") return a.ids.length;
+  return a.emails.length + a.phones.length;
+}
+
+function openNoteDialog() {
+  const dlg = $("#noteDialog");
+  dlg.innerHTML = `
+    <h3>📣 Message the campers</h3>
+    <div class="sub">Posts an in-app note, and sends it by email — or by text for campers with no email on file.</div>
+    <div class="field">
+      <label>Send to</label>
+      <select id="noteAudience">
+        <option value="all">Everyone${REMOTE ? ` (${audienceCount("all")} contact${audienceCount("all") === 1 ? "" : "s"})` : ""}</option>
+        <option value="ordered">Those who ordered (${audienceCount("ordered")})</option>
+        <option value="not-ordered">Those who haven't ordered (${audienceCount("not-ordered")})</option>
+      </select>
+    </div>
+    <div class="field">
+      <label>Message</label>
+      <textarea id="noteText" rows="3" placeholder="e.g. Pancakes are back on the menu tomorrow — order by 8!"></textarea>
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('noteDialog').close()">Cancel</button>
+      <button class="btn primary" id="noteSend" onclick="sendChefNote()">Send note</button>
+    </div>`;
+  dlg.showModal();
+  $("#noteText").focus();
+}
+
+async function sendChefNote() {
+  const kind = $("#noteAudience").value;
+  const text = $("#noteText").value.trim();
+  if (!text) { toast("Write the note first"); return; }
+  const aud = siteAudience(kind);
+  if (kind !== "all" && !aud.ids.length && !aud.emails.length && !aud.phones.length) {
+    toast("Nobody in that group yet");
+    return;
+  }
+  const btn = $("#noteSend");
+  btn.disabled = true;
+  btn.textContent = "Sending…";
+
+  const ok = await commit((s) => {
+    if (aud.ids === null) {
+      notify("all", `📣 Chef: ${text}`);
+    } else {
+      for (const id of aud.ids) notify(id, `📣 Chef: ${text}`);
+    }
+  });
+
+  let delivery = "";
+  if (ok && REMOTE && session && (aud.emails.length || aud.phones.length)) {
+    try {
+      const res = await fetch(`${CFG.supabaseUrl.replace(/\/$/, "")}/functions/v1/send-invites`, {
+        method: "POST",
+        headers: {
+          apikey: CFG.supabaseAnonKey,
+          Authorization: `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          phones: aud.phones,
+          emails: aud.emails,
+          subject: "📣 A note from the camp chef",
+          message: `📣 Note from the camp chef: ${text} — ${inviteLink(prefs.siteId)}`,
+        }),
+      });
+      if (res.status === 404) {
+        delivery = " (in-app only — deploy the send-invites Edge Function for email/text)";
+      } else {
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok) delivery = ` (in-app sent; email/text failed: ${j.error || res.status})`;
+        else {
+          const sent = (j.results || []).filter((r) => r.ok).length;
+          const bad = (j.results || []).length - sent;
+          delivery = bad ? ` — ${sent} sent, ${bad} failed` : ` — ${sent} email/text${sent === 1 ? "" : "s"} sent`;
+        }
+      }
+    } catch (e) {
+      delivery = " (in-app sent; email/text couldn't reach the server)";
+    }
+  }
+  btn.disabled = false;
+  btn.textContent = "Send note";
+  if (ok) {
+    $("#noteDialog").close();
+    toast(`📣 Note sent${delivery}`);
   }
 }
 

@@ -97,6 +97,32 @@ notifications. The seeded breakfast data lives in the permanent
    Until it's deployed, the button explains itself and the tap-to-text
    fallback keeps working.
 
+## Chef notes & automatic cutoff reminders
+
+- **📣 Message campers** (chef view, Order window panel): the chef writes
+  a note and picks the audience — **everyone**, **those who ordered**, or
+  **those who haven't ordered** (computed from the current day's orders
+  vs. the site's invited contacts). The note lands as an in-app
+  notification and is also sent by **email — or by text for campers with
+  no email on file** — through the `send-invites` Edge Function.
+- **⏰ Automatic cutoff reminders**: the `send-reminders` Edge Function
+  runs on a schedule and, when a camp site's cutoff is less than an hour
+  away, reminds every invited contact who hasn't ordered tomorrow's
+  breakfast yet (email first, text when there's no email). Each cutoff is
+  reminded once. Setup:
+  1. Deploy `supabase/functions/send-reminders/index.ts` as an Edge
+     Function named exactly `send-reminders`, and turn OFF "Enforce JWT
+     verification" in its settings.
+  2. Add secrets: `CRON_SECRET` (any random string) and `SITE_URL`
+     (`https://devtator.github.io/SmartThingsPublic/`), alongside the
+     Twilio/Resend secrets above.
+  3. Put the same secret into [`supabase-cron.sql`](supabase-cron.sql)
+     and run it in the SQL Editor — it schedules a check every 10 minutes
+     (pg_cron + pg_net).
+  Timezone note: reminders use the timezone recorded from the chef's
+  device when the cutoff was set or the day was wrapped, so run those
+  from the phone you actually use at camp.
+
 ## Sign-in: texted code or emailed one-time link
 
 In live-sync mode everyone — chef and campers — signs in with **either**
