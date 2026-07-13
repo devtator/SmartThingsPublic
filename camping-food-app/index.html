@@ -610,7 +610,7 @@ function seedData() {
   return {
     meals, orders, notifications, history,
     day: { startedAt: Date.now(), label: "Today" },
-    cutoffTime: "", orderingOverride: null,
+    cutoffTime: "20:00", orderingOverride: null,
     nextId: 100,
   };
 }
@@ -620,7 +620,7 @@ function emptySiteData() {
   return {
     meals: [], orders: [], notifications: [], history: [],
     day: { startedAt: Date.now(), label: "Today" },
-    cutoffTime: "", orderingOverride: null,
+    cutoffTime: "20:00", orderingOverride: null,
     nextId: 100,
   };
 }
@@ -1218,11 +1218,16 @@ function mealReviews(mealId) {
   return allOrdersEver().filter((o) => o.mealId === mealId && o.review);
 }
 
-/* ------------------- day cycle & cutoff ------------------------- */
-const CUTOFF_CHOICES = ["", "06:00", "06:30", "07:00", "07:30", "08:00", "08:30",
-                        "18:00", "19:00", "20:00", "21:00", "22:00"];
+/* ------------------- day cycle & cutoff -------------------------
+ * Orders are always placed the day BEFORE the meal: campers order
+ * tonight for tomorrow's breakfast — no same-day ordering. Ordering
+ * closes at an evening cutoff of the chef's choosing (5 PM to
+ * midnight) and reopens when the chef wraps up the next morning's
+ * service. */
+const CUTOFF_CHOICES = ["", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00", "23:00", "24:00"];
 function cutoffLabel(v) {
   if (!v) return "No cutoff";
+  if (v === "24:00") return "Midnight";
   const [h, mnt] = v.split(":").map(Number);
   return `${((h + 11) % 12) + 1}:${String(mnt).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
 }
@@ -1310,11 +1315,11 @@ function camperView() {
 
     ${closed ? `
     <div class="card" style="margin-bottom:16px;border-left:5px solid var(--ember)">
-      <strong>🌙 Ordering is closed for now.</strong>
-      <div class="hint" style="margin:0">The chef will reopen the kitchen for the next meal — check back soon! Your existing orders below are unaffected.</div>
+      <strong>🌙 Ordering for tomorrow's breakfast is closed.</strong>
+      <div class="hint" style="margin:0">The chef opens the next day's ordering after breakfast is served — your existing orders below are unaffected.</div>
     </div>` : ""}
-    <div class="section-title">☀️ This morning's menu</div>
-    <p class="hint">Pick a meal and the pickup time you'd prefer. The chef reviews everyone's preferences and confirms one cook time.</p>
+    <div class="section-title">🌅 Tomorrow's breakfast menu</div>
+    <p class="hint">Order today for tomorrow morning — no same-day ordering. Pick a meal and your preferred pickup time; after ordering closes, the chef confirms one cook time for everyone.</p>
     <div class="cards">
       ${avail.map((m) => `
         <div class="card">
@@ -1389,20 +1394,21 @@ function chefView() {
   const reviews = allOrdersEver().filter((o) => o.review).slice(0, 12);
   const closed = orderingClosed();
   const dayStatus = closed
-    ? (state.orderingOverride === "closed" ? "ordering closed by you" : `ordering closed (past ${cutoffLabel(state.cutoffTime)} cutoff)`)
-    : (state.cutoffTime ? `open — orders close at ${cutoffLabel(state.cutoffTime)}` : "open for orders");
+    ? (state.orderingOverride === "closed" ? "ordering closed by you — cooking tomorrow's orders" : `ordering closed (past ${cutoffLabel(state.cutoffTime)} cutoff) — tomorrow's orders are in`)
+    : (state.cutoffTime ? `taking orders for tomorrow — closes at ${cutoffLabel(state.cutoffTime)}` : "taking orders for tomorrow (no cutoff set)");
 
   return `
     <div class="card" style="margin-bottom:16px">
       <div class="meal-head">
         <span class="meal-emoji">🌅</span>
         <div>
-          <div class="meal-name">Today's service</div>
+          <div class="meal-name">Order window</div>
           <div class="meal-cat">${esc(state.day && state.day.label || "Today")} · ${esc(dayStatus)}</div>
         </div>
       </div>
+      <p class="hint" style="margin:0">Campers order the day before — pick your evening cutoff, then after you serve breakfast, wrap up to open ordering for the next day.</p>
       <div class="row">
-        <label class="toggle-avail" style="gap:6px">Order cutoff:
+        <label class="toggle-avail" style="gap:6px">Evening cutoff:
           <select id="cutoffSel" style="width:auto" onchange="setCutoff(this.value)">
             ${CUTOFF_CHOICES.map((c) => `<option value="${c}" ${state.cutoffTime === c ? "selected" : ""}>${cutoffLabel(c)}</option>`).join("")}
           </select>
@@ -1411,7 +1417,7 @@ function chefView() {
         ${closed
           ? `<button class="btn green small" onclick="setOrderingOverride('open')">🔓 Reopen ordering</button>`
           : `<button class="btn ghost small" onclick="setOrderingOverride('closed')">🔒 Close ordering now</button>`}
-        <button class="btn primary small" onclick="startNewMorning()">🌅 Start a new morning</button>
+        <button class="btn primary small" onclick="startNewMorning()">🌅 Wrap up breakfast &amp; open tomorrow</button>
       </div>
     </div>
 
@@ -1651,7 +1657,7 @@ function confirmMealTime(mealId) {
     for (const o of affected) {
       o.status = "confirmed";
       o.confirmedSlot = slot;
-      notify(o.camperId || o.camper, `👨‍🍳 Chef confirmed: ${meal.name} will be ready for pickup at ${slot} at the camp kitchen.`);
+      notify(o.camperId || o.camper, `👨‍🍳 Chef confirmed: ${meal.name} will be ready tomorrow at ${slot} at the camp kitchen.`);
     }
   }).then((ok) => {
     if (ok) toast(`📣 ${count} camper${count !== 1 ? "s" : ""} notified — ${mealName} at ${slot}`);
@@ -1664,7 +1670,7 @@ function setCutoff(value) {
     s.cutoffTime = value;
     s.orderingOverride = null; // a new cutoff clears any manual open/close
   }).then((ok) => {
-    if (ok) toast(value ? `⏰ Orders now close at ${cutoffLabel(value)}` : "⏰ Cutoff removed — ordering stays open");
+    if (ok) toast(value ? `⏰ Orders for tomorrow now close at ${cutoffLabel(value)}` : "⏰ Cutoff removed — ordering stays open");
   });
 }
 
@@ -1678,7 +1684,7 @@ function setOrderingOverride(v) {
 }
 
 function startNewMorning() {
-  if (!confirm("Start a new morning? Today's orders move into history and the board resets for a fresh day.")) return;
+  if (!confirm("Wrap up this breakfast? Today's orders move into history and ordering opens for tomorrow.")) return;
   const startedAt = Date.now();
   const newLabel = new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
   let archived = 0;
@@ -1707,9 +1713,9 @@ function startNewMorning() {
     s.notifications = [];
     s.orderingOverride = null;
     s.day = { startedAt, label: newLabel };
-    notify("all", "🌅 Good morning! The camp kitchen is open — put in your breakfast order.");
+    notify("all", "🌅 The camp kitchen is taking orders for tomorrow's breakfast — get yours in before the cutoff!");
   }).then((ok) => {
-    if (ok) toast(`🌅 New morning started${archived ? ` — ${archived} order${archived === 1 ? "" : "s"} archived` : ""}`);
+    if (ok) toast(`🌅 Breakfast wrapped up — taking orders for tomorrow${archived ? ` (${archived} order${archived === 1 ? "" : "s"} archived)` : ""}`);
   });
 }
 
@@ -1817,7 +1823,7 @@ function openOrderDialog(mealId) {
   const dlg = $("#orderDialog");
   dlg.innerHTML = `
     <h3>${m.emoji} ${esc(m.name)}</h3>
-    <div class="sub">${money(m.price)} · pick your preferred pickup time. The chef confirms the final time for everyone.</div>
+    <div class="sub">${money(m.price)} · for <strong>tomorrow morning</strong> — pick your preferred pickup time. The chef confirms the final time for everyone.</div>
     <div class="field">
       <label>Preferred pickup time</label>
       <div class="slot-picker" id="dlgSlots">
@@ -1907,7 +1913,7 @@ function placeOrder(mealId) {
     });
     notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot}).${notes ? " Note: " + notes : ""}`);
   }).then((ok) => {
-    if (ok) toast(`Order placed! The chef will confirm the pickup time.`);
+    if (ok) toast(`Order placed for tomorrow! The chef will confirm the pickup time.`);
   });
   $("#orderDialog").close();
 }

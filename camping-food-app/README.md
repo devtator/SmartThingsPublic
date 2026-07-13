@@ -200,14 +200,16 @@ The app has two roles, switchable with the toggle in the header:
 - **Marks meals served** — after handout, *"Mark served & request reviews"*
   notifies every camper who picked it up to rate the meal and send
   compliments.
-- **Runs the day cycle** — the *Today's service* panel sets an **order
-  cutoff time** (ordering locks automatically once it passes, with manual
-  *Close now / Reopen* overrides), and **🌅 Start a new morning** archives
-  the day's orders into **📜 Past mornings** — a browsable history with
-  servings and revenue per day — then resets the board and greets campers
-  with a good-morning notification. Ratings survive archiving, so meal
-  stars keep accumulating across days. Day-cycle settings are chef-only,
-  enforced server-side.
+- **Runs the day cycle** — orders are always placed **the day before the
+  meal** (no same-day ordering). The *Order window* panel sets an
+  **evening cutoff** (5 PM–midnight, chef's preference); ordering locks
+  automatically once it passes, with manual *Close now / Reopen*
+  overrides. After serving breakfast, **🌅 Wrap up breakfast & open
+  tomorrow** archives the day's orders into **📜 Past mornings** — a
+  browsable history with servings and revenue per day — reopens ordering
+  for the next morning, and notifies campers to get their orders in.
+  Ratings survive archiving, so meal stars keep accumulating across days.
+  Day-cycle settings are chef-only, enforced server-side.
 - **Collects kudos** — camper ratings and compliments land on the
   💛 *Compliments & ratings* board, and each meal shows its average rating.
 
@@ -221,9 +223,11 @@ The app has two roles, switchable with the toggle in the header:
 - **Gets notified** — the 🔔 bell shows when the chef confirms the actual
   pickup time. Orders show *Awaiting chef* until then, and the confirmed
   pickup time after.
-- **Respects the cutoff** — once ordering closes (cutoff time passed or
-  chef closed it), the menu shows a "🌙 Ordering is closed" banner and the
-  Order buttons disappear until the chef reopens or starts a new morning.
+- **Orders the day before** — the menu is always *tomorrow's* breakfast.
+  Once the evening cutoff passes (or the chef closes ordering), the menu
+  shows a "🌙 Ordering for tomorrow's breakfast is closed" banner and the
+  Order buttons disappear until the chef wraps up the next morning's
+  service.
 - **Rates & thanks the chef** — after the chef marks a meal served, the
   camper gets a notification and a ⭐ *Rate & thank the chef* button on the
   order: a 1–5 star rating plus optional compliments, delivered straight to
