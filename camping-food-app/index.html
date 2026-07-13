@@ -567,8 +567,26 @@ function seedData() {
       options: { "Salsa": ["Mild"], "Extras": ["Avocado"] } },
     { id: "o5", mealId: "m4", camper: "Jordan", camperId: "Jordan", qty: 2, preferred: "8:30 AM", notes: "",                            status: "pending",   confirmedSlot: null,      review: null },
     { id: "o6", mealId: "m5", camper: "Morgan", camperId: "Morgan", qty: 1, preferred: "9:00 AM", notes: "Extra avocado",               status: "served",    confirmedSlot: "9:00 AM", review: null },
-    { id: "o7", mealId: "m6", camper: "Dana",   camperId: "Dana",   qty: 1, preferred: "8:30 AM", notes: "",                            status: "served",    confirmedSlot: "8:30 AM",
-      review: { rating: 5, comment: "Fluffiest pancakes I've ever had at a campsite — thank you, Chef!", when: "Yesterday 10:05 AM" } },
+  ];
+
+  // Yesterday's service, already archived: history keeps a snapshot
+  // of each order (meal name/emoji/price copied in, so later menu
+  // edits can't rewrite the past) plus servings and revenue totals.
+  const history = [
+    {
+      id: "h1", label: "Yesterday", archivedAt: "Yesterday 10:30 AM",
+      orders: [
+        { id: "o7", mealId: "m6", camper: "Dana", camperId: "Dana", qty: 1, preferred: "8:30 AM", notes: "",
+          status: "served", confirmedSlot: "8:30 AM",
+          mealName: "Pancake Stack & Bacon Plate", mealEmoji: "🥞", price: 9.0,
+          review: { rating: 5, comment: "Fluffiest pancakes I've ever had at a campsite — thank you, Chef!", when: "Yesterday 10:05 AM" } },
+        { id: "o8", mealId: "m1", camper: "Sam", camperId: "Sam", qty: 1, preferred: "7:30 AM", notes: "",
+          status: "served", confirmedSlot: "7:30 AM",
+          mealName: "Eggs & Bacon Breakfast Sandwich", mealEmoji: "🥓", price: 8.0,
+          options: { "Bread": ["Toast"], "Add-ons": ["Cheese"] }, review: null },
+      ],
+      servings: 2, revenue: 17.0,
+    },
   ];
 
   const notifications = [
@@ -589,12 +607,31 @@ function seedData() {
     },
   ];
 
-  return { meals, orders, notifications, nextId: 100 };
+  return {
+    meals, orders, notifications, history,
+    day: { startedAt: Date.now(), label: "Today" },
+    cutoffTime: "", orderingOverride: null,
+    nextId: 100,
+  };
 }
 
 // A brand-new camp site starts with an empty kitchen.
 function emptySiteData() {
-  return { meals: [], orders: [], notifications: [], nextId: 100 };
+  return {
+    meals: [], orders: [], notifications: [], history: [],
+    day: { startedAt: Date.now(), label: "Today" },
+    cutoffTime: "", orderingOverride: null,
+    nextId: 100,
+  };
+}
+
+// Older stored data may predate the day-cycle fields.
+function ensureDayFields(s) {
+  if (!s) return;
+  if (!Array.isArray(s.history)) s.history = [];
+  if (!s.day) s.day = { startedAt: 0, label: "" };
+  if (s.cutoffTime === undefined) s.cutoffTime = "";
+  if (s.orderingOverride === undefined) s.orderingOverride = null;
 }
 
 // The directory (row 0 in live sync) lists every camp site. Site 1
@@ -1146,8 +1183,39 @@ function esc(s) {
 function money(n) { return "$" + n.toFixed(2); }
 function mealById(id) { return state.meals.find((m) => m.id === id); }
 function starStr(n) { return "★".repeat(n) + "☆".repeat(5 - n); }
+// Today's orders plus every archived one — ratings outlive the day.
+function allOrdersEver() {
+  return state.orders.concat((state.history || []).flatMap((h) => h.orders || []));
+}
 function mealReviews(mealId) {
-  return state.orders.filter((o) => o.mealId === mealId && o.review);
+  return allOrdersEver().filter((o) => o.mealId === mealId && o.review);
+}
+
+/* ------------------- day cycle & cutoff ------------------------- */
+const CUTOFF_CHOICES = ["", "06:00", "06:30", "07:00", "07:30", "08:00", "08:30",
+                        "18:00", "19:00", "20:00", "21:00", "22:00"];
+function cutoffLabel(v) {
+  if (!v) return "No cutoff";
+  const [h, mnt] = v.split(":").map(Number);
+  return `${((h + 11) % 12) + 1}:${String(mnt).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+}
+
+// True once the first occurrence of the cutoff time after the day
+// started has passed on this device's clock.
+function pastCutoff() {
+  if (!state || !state.cutoffTime || !state.day || !state.day.startedAt) return false;
+  const [h, mnt] = state.cutoffTime.split(":").map(Number);
+  const c = new Date(state.day.startedAt);
+  c.setHours(h, mnt, 0, 0);
+  if (c.getTime() < state.day.startedAt) c.setDate(c.getDate() + 1);
+  return Date.now() >= c.getTime();
+}
+
+function orderingClosed() {
+  if (!state) return false;
+  if (state.orderingOverride === "closed") return true;
+  if (state.orderingOverride === "open") return false;
+  return pastCutoff();
 }
 function ratingChip(mealId) {
   const revs = mealReviews(mealId);
@@ -1200,6 +1268,7 @@ function camperView() {
   const myOrders = state.orders.filter((o) => mine.includes(o.camperId || o.camper));
   const myNotifs = state.notifications.filter((n) => mine.includes(n.to) || n.to === "all");
   const avail = state.meals.filter((m) => m.available);
+  const closed = orderingClosed();
 
   return `
     <div class="name-bar">
@@ -1212,6 +1281,11 @@ function camperView() {
         : `<span class="hint" style="margin:0">Change the name to order as a different camper.</span>`}
     </div>
 
+    ${closed ? `
+    <div class="card" style="margin-bottom:16px;border-left:5px solid var(--ember)">
+      <strong>🌙 Ordering is closed for now.</strong>
+      <div class="hint" style="margin:0">The chef will reopen the kitchen for the next meal — check back soon! Your existing orders below are unaffected.</div>
+    </div>` : ""}
     <div class="section-title">☀️ This morning's menu</div>
     <p class="hint">Pick a meal and the pickup time you'd prefer. The chef reviews everyone's preferences and confirms one cook time.</p>
     <div class="cards">
@@ -1232,7 +1306,9 @@ function camperView() {
             ${(m.optionGroups || []).length ? `<span class="chip">🛠️ customizable</span>` : ""}
             ${m.slots.map((s) => `<span class="chip slot">${s}</span>`).join("")}
           </div>
-          <button class="btn primary" onclick="openOrderDialog('${m.id}')">Order</button>
+          ${closed
+            ? `<button class="btn ghost" disabled>🌙 Ordering closed</button>`
+            : `<button class="btn primary" onclick="openOrderDialog('${m.id}')">Order</button>`}
         </div>
       `).join("") || `<div class="empty">The chef hasn't posted any meals yet — check back soon!</div>`}
     </div>
@@ -1283,9 +1359,35 @@ function chefView() {
   const confirmedByMeal = state.meals
     .map((m) => ({ meal: m, orders: state.orders.filter((o) => o.mealId === m.id && o.status === "confirmed") }))
     .filter((g) => g.orders.length > 0);
-  const reviews = state.orders.filter((o) => o.review);
+  const reviews = allOrdersEver().filter((o) => o.review).slice(0, 12);
+  const closed = orderingClosed();
+  const dayStatus = closed
+    ? (state.orderingOverride === "closed" ? "ordering closed by you" : `ordering closed (past ${cutoffLabel(state.cutoffTime)} cutoff)`)
+    : (state.cutoffTime ? `open — orders close at ${cutoffLabel(state.cutoffTime)}` : "open for orders");
 
   return `
+    <div class="card" style="margin-bottom:16px">
+      <div class="meal-head">
+        <span class="meal-emoji">🌅</span>
+        <div>
+          <div class="meal-name">Today's service</div>
+          <div class="meal-cat">${esc(state.day && state.day.label || "Today")} · ${esc(dayStatus)}</div>
+        </div>
+      </div>
+      <div class="row">
+        <label class="toggle-avail" style="gap:6px">Order cutoff:
+          <select id="cutoffSel" style="width:auto" onchange="setCutoff(this.value)">
+            ${CUTOFF_CHOICES.map((c) => `<option value="${c}" ${state.cutoffTime === c ? "selected" : ""}>${cutoffLabel(c)}</option>`).join("")}
+          </select>
+        </label>
+        <span class="spacer"></span>
+        ${closed
+          ? `<button class="btn green small" onclick="setOrderingOverride('open')">🔓 Reopen ordering</button>`
+          : `<button class="btn ghost small" onclick="setOrderingOverride('closed')">🔒 Close ordering now</button>`}
+        <button class="btn primary small" onclick="startNewMorning()">🌅 Start a new morning</button>
+      </div>
+    </div>
+
     <div class="section-title">📋 Review orders &amp; set pickup times</div>
     <p class="hint">Campers voted with their preferred times. Pick the one time you'll cook each meal — confirming notifies every camper who ordered it.</p>
     ${pendingByMeal.length ? pendingByMeal.map(chefOrderGroup).join("")
@@ -1318,7 +1420,7 @@ function chefView() {
       <div class="section-title">💛 Compliments &amp; ratings</div>
       <div class="card">
         ${reviews.map((o) => {
-          const m = mealById(o.mealId);
+          const m = mealById(o.mealId) || { emoji: o.mealEmoji || "🍽️", name: o.mealName || "(off the menu)" };
           return `<div class="review-line">
             <span class="stars">${starStr(o.review.rating)}</span>
             <strong>${esc(o.camper)}</strong> · ${m.emoji} ${esc(m.name)}
@@ -1327,6 +1429,26 @@ function chefView() {
           </div>`;
         }).join("")}
       </div>` : ""}
+
+    ${(state.history || []).length ? `
+      <div class="section-title">📜 Past mornings</div>
+      <p class="hint">Each morning's orders are archived when you start a new day.</p>
+      ${(state.history || []).map((h) => {
+        const nOrders = (h.orders || []).length;
+        return `
+        <details class="card" style="margin-bottom:10px">
+          <summary style="cursor:pointer;font-weight:700">🗓️ ${esc(h.label)} — ${nOrders} order${nOrders === 1 ? "" : "s"} · ${h.servings} served · ${money(h.revenue || 0)}</summary>
+          ${(h.orders || []).map((o) => `
+            <div class="order-line">
+              <span>${o.mealEmoji || "🍽️"}</span>
+              <span class="who">${esc(o.camper)}</span>
+              <span>${o.qty}× ${esc(o.mealName || "")}</span>
+              <span class="status ${o.status}">${o.status}</span>
+              ${optSummary(o) ? `<span class="chip">${esc(optSummary(o))}</span>` : ""}
+              ${o.review ? `<span class="stars">${starStr(o.review.rating)}</span>` : ""}
+            </div>`).join("")}
+        </details>`;
+      }).join("")}` : ""}
 
     <div class="section-title">🍳 My meals &amp; cook times</div>
     <p class="hint">Toggle what's on the menu and set the time slots you're willing to cook.</p>
@@ -1509,6 +1631,61 @@ function confirmMealTime(mealId) {
   });
 }
 
+function setCutoff(value) {
+  commit((s) => {
+    ensureDayFields(s);
+    s.cutoffTime = value;
+    s.orderingOverride = null; // a new cutoff clears any manual open/close
+  }).then((ok) => {
+    if (ok) toast(value ? `⏰ Orders now close at ${cutoffLabel(value)}` : "⏰ Cutoff removed — ordering stays open");
+  });
+}
+
+function setOrderingOverride(v) {
+  commit((s) => {
+    ensureDayFields(s);
+    s.orderingOverride = v;
+  }).then((ok) => {
+    if (ok) toast(v === "closed" ? "🔒 Ordering is closed" : "🔓 Ordering is open again");
+  });
+}
+
+function startNewMorning() {
+  if (!confirm("Start a new morning? Today's orders move into history and the board resets for a fresh day.")) return;
+  const startedAt = Date.now();
+  const newLabel = new Date().toLocaleDateString([], { weekday: "short", month: "short", day: "numeric" });
+  let archived = 0;
+  commit((s) => {
+    ensureDayFields(s);
+    // Snapshot orders with meal details so later menu edits can't
+    // rewrite history.
+    const snaps = s.orders.map((o) => {
+      const m = s.meals.find((x) => x.id === o.mealId) || {};
+      return { ...o, mealName: m.name || "(removed meal)", mealEmoji: m.emoji || "🍽️", price: m.price || 0 };
+    });
+    archived = snaps.length;
+    if (snaps.length) {
+      const served = snaps.filter((o) => o.status === "served");
+      s.history.unshift({
+        id: uid("h"),
+        label: (s.day && s.day.label) || "Earlier",
+        archivedAt: nowLabel(),
+        orders: snaps,
+        servings: served.reduce((a, o) => a + o.qty, 0),
+        revenue: served.reduce((a, o) => a + o.qty * (o.price || 0), 0),
+      });
+      s.history = s.history.slice(0, 30); // keep the log bounded
+    }
+    s.orders = [];
+    s.notifications = [];
+    s.orderingOverride = null;
+    s.day = { startedAt, label: newLabel };
+    notify("all", "🌅 Good morning! The camp kitchen is open — put in your breakfast order.");
+  }).then((ok) => {
+    if (ok) toast(`🌅 New morning started${archived ? ` — ${archived} order${archived === 1 ? "" : "s"} archived` : ""}`);
+  });
+}
+
 function markServed(mealId) {
   let count = 0, mealName = "";
   commit((s) => {
@@ -1682,6 +1859,11 @@ function optSummary(o) {
 }
 
 function placeOrder(mealId) {
+  if (orderingClosed()) {
+    toast("🌙 Ordering is closed — the chef will reopen the kitchen soon");
+    $("#orderDialog").close();
+    return;
+  }
   const name = prefs.camperName.trim();
   if (!name) { toast("Set your name at the top first!"); return; }
   const qty = Math.max(1, parseInt($("#dlgQty").value, 10) || 1);

@@ -1,7 +1,10 @@
--- Campfire Kitchen database setup (v4).
+-- Campfire Kitchen database setup (v5).
 -- v4: users may sign in with a phone number OR an email (or link
 -- both to one account) — chef checks and order ownership accept
 -- either identity.
+-- v5: campers also can't touch the day-cycle settings — order
+-- history, the current day, the cutoff time, or the open/closed
+-- override are chef-only.
 -- Run this in your Supabase project's SQL editor
 -- (Dashboard → SQL Editor → New query → paste → Run).
 -- Safe to re-run: it drops and recreates its own policies/functions.
@@ -158,6 +161,12 @@ begin
     end if;
     if (v_old.data->'meals') is distinct from (p_data->'meals') then
       raise exception 'only the chef can change the menu';
+    end if;
+    if coalesce(v_old.data->'history', '[]'::jsonb) is distinct from coalesce(p_data->'history', '[]'::jsonb)
+       or (v_old.data->'day') is distinct from (p_data->'day')
+       or coalesce(v_old.data->'cutoffTime', '""'::jsonb) is distinct from coalesce(p_data->'cutoffTime', '""'::jsonb)
+       or coalesce(v_old.data->'orderingOverride', 'null'::jsonb) is distinct from coalesce(p_data->'orderingOverride', 'null'::jsonb) then
+      raise exception 'only the chef can change kitchen settings';
     end if;
     if exists (
       with old_orders as (
