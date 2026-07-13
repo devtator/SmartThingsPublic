@@ -20,6 +20,12 @@ window.CAMPFIRE_CONFIG = {
   // can read/write the shared data — see README caveats.)
   supabaseAnonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9jcXR1amd4ZnRkYmp1dWhybHhsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3MTE0ODcsImV4cCI6MjA5OTI4NzQ4N30.qMnB01ce2UjocD_00xf-_blEEb3M9PMU8h8eBMaydJY",
 
+  // Sign in with a texted code? Set to true once the SMS provider
+  // (Twilio) is verified and connected in Supabase. While false, the
+  // sign-in screen offers email links only (and the Account panel
+  // hides phone linking).
+  phoneSignIn: false,
+
   // NOTE: with the v3 database setup, WHO IS A CHEF is decided
   // server-side by the campfire_chefs table (see supabase-setup.sql)
   // — the database rejects chef-only writes from anyone else. The

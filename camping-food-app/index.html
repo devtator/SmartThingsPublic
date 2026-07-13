@@ -897,14 +897,16 @@ function openAccountDialog() {
       <label>📱 Phone</label>
       ${u.phone
         ? `<div class="invite-link-box">+${esc(String(u.phone).replace(/^\+/, ""))}</div>`
-        : `<div class="row">
+        : (PHONE_SIGNIN
+          ? `<div class="row">
              <input type="tel" id="acctPhone" placeholder="e.g. 555-123-4567" style="flex:1;min-width:150px">
              <button class="btn green small" id="acctAddPhone">Link phone</button>
            </div>
            <div class="row" id="acctPhoneVerifyRow" hidden style="margin-top:8px">
              <input type="text" id="acctPhoneCode" class="code-input" placeholder="••••••" maxlength="10" style="flex:1;min-width:120px">
              <button class="btn green small" id="acctVerifyPhone">Verify code</button>
-           </div>`}
+           </div>`
+          : `<p class="hint" style="margin:0">Phone linking is coming soon — texting isn't switched on yet.</p>`)}
     </div>
     <div class="field">
       <label>✉️ Email</label>
@@ -918,7 +920,7 @@ function openAccountDialog() {
     <div class="row" style="justify-content:flex-end">
       <button class="btn primary" onclick="document.getElementById('accountDialog').close()">Done</button>
     </div>`;
-  if (!u.phone) {
+  if (!u.phone && PHONE_SIGNIN) {
     let pendingPhone = null;
     $("#acctAddPhone").onclick = async () => {
       const phone = normalizePhone($("#acctPhone").value);
@@ -2441,19 +2443,24 @@ function copyInviteLink(siteId) {
 /* -------------------- sign-in screens -------------------------- */
 let loginPhone = null;
 
-let loginMethod = "phone"; // "phone" (texted code) or "email" (magic link)
+// Phone sign-in can be hidden via config (phoneSignIn: false) while
+// the SMS provider isn't set up yet; email remains the only path.
+const PHONE_SIGNIN = CFG.phoneSignIn !== false;
+let loginMethod = PHONE_SIGNIN ? "phone" : "email"; // "phone" (texted code) or "email" (magic link)
 
 function renderLogin(msg) {
+  if (!PHONE_SIGNIN) loginMethod = "email";
   $("#app").innerHTML = `
     <div class="login-wrap">
       <div class="card">
         <div class="login-emoji">🏕️</div>
         <h2>Sign in to Campfire Kitchen</h2>
-        <p class="hint">${msg ? esc(msg) : "Use your cell number or your email — whichever you like."}</p>
+        <p class="hint">${msg ? esc(msg) : (PHONE_SIGNIN ? "Use your cell number or your email — whichever you like." : "Enter your email and we'll send you a one-time sign-in link.")}</p>
+        ${PHONE_SIGNIN ? `
         <div class="method-toggle">
           <button type="button" id="methodPhone" class="${loginMethod === "phone" ? "active" : ""}">📱 Phone</button>
           <button type="button" id="methodEmail" class="${loginMethod === "email" ? "active" : ""}">✉️ Email</button>
-        </div>
+        </div>` : ""}
         ${loginMethod === "phone" ? `
         <div class="field">
           <label>Cell phone number</label>
@@ -2467,8 +2474,10 @@ function renderLogin(msg) {
         <button class="btn primary" id="sendLinkBtn">Email me a one-time sign-in link</button>`}
       </div>
     </div>`;
-  $("#methodPhone").onclick = () => { loginMethod = "phone"; renderLogin(msg); };
-  $("#methodEmail").onclick = () => { loginMethod = "email"; renderLogin(msg); };
+  if (PHONE_SIGNIN) {
+    $("#methodPhone").onclick = () => { loginMethod = "phone"; renderLogin(msg); };
+    $("#methodEmail").onclick = () => { loginMethod = "email"; renderLogin(msg); };
+  }
   if (loginMethod === "phone") {
     const send = () => onSendCode();
     $("#sendCodeBtn").onclick = send;
