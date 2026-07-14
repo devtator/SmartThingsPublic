@@ -2324,7 +2324,7 @@ function inviteLink(siteId) {
 }
 
 function inviteMessage(site) {
-  return `🏕️ You're invited to ${site.name}'s camp kitchen! Order breakfast from the chef here: ${inviteLink(site.id)}`;
+  return `🏕️ You're invited to ${site.name}'s camp kitchen! Order breakfast from the chef here:\n\n\n${inviteLink(site.id)}`;
 }
 
 function openInviteDialog(siteId) {
@@ -2505,7 +2505,7 @@ async function sendChefNote() {
           phones: aud.phones,
           emails: aud.emails,
           subject: "📣 A note from the camp chef",
-          message: `📣 Note from the camp chef: ${text} — ${inviteLink(prefs.siteId)}`,
+          message: `📣 Note from the camp chef:\n\n${text}\n\n\n${inviteLink(prefs.siteId)}`,
         }),
       });
       if (res.status === 404) {

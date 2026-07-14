@@ -164,7 +164,7 @@ Deno.serve(async (req) => {
 
     const link = siteUrl ? `${siteUrl}/?site=${site.id}` : "";
     const label = cutoffLabel(String(d.cutoffTime));
-    const message = `⏰ Last call from ${site.name}'s camp kitchen: order tomorrow's breakfast before ${label}!${link ? " " + link : ""}`;
+    const message = `⏰ Last call from ${site.name}'s camp kitchen: order tomorrow's breakfast before ${label}!${link ? "\n\n\n" + link : ""}`;
     const results: unknown[] = [];
     for (const to of emails.slice(0, 50)) {
       results.push({ to, ...(await sendEmail(to, "⏰ Breakfast orders close soon", message)) });
