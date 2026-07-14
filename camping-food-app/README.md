@@ -99,9 +99,17 @@ notifications. The seeded breakfast data lives in the permanent
    - For invite **texts**: `TWILIO_ACCOUNT_SID` and `TWILIO_AUTH_TOKEN`
      (Twilio console), plus `TWILIO_FROM` (your Twilio number, `+1…`) — or
      `TWILIO_MESSAGING_SERVICE_SID` instead.
-   - For invite **emails**: `RESEND_API_KEY` (free at resend.com) and
-     `RESEND_FROM` (e.g. `Campfire Kitchen <onboarding@resend.dev>`, or an
-     address on your verified domain).
+   - For invite **emails**, pick one provider:
+     - **Your own SMTP server** (e.g. the same credentials you gave
+       Supabase Auth's SMTP settings — note Supabase Auth's SMTP config is
+       *not* shared with functions, so set them here too): `SMTP_HOST`,
+       `SMTP_PORT` (465 for implicit TLS, 587 for STARTTLS), `SMTP_USER`,
+       `SMTP_PASS`, and `SMTP_FROM` (e.g.
+       `Campfire Kitchen <chef@yourdomain.com>`).
+     - **or Resend**: `RESEND_API_KEY` (free at resend.com) and
+       `RESEND_FROM` (e.g. `Campfire Kitchen <onboarding@resend.dev>`).
+     SMTP is used when `SMTP_HOST` is set; otherwise Resend. These same
+     secrets are shared with the `send-reminders` function.
 3. Done — the 🚀 button in the invite panel now sends real texts. The
    function verifies the caller is a chef (via `campfire_is_chef`) before
    sending, caps each call at 25 numbers, and reports per-number results.

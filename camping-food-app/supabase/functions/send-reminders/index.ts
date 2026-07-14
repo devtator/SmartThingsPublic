@@ -11,11 +11,13 @@
 //   name it exactly `send-reminders` → paste this file → Deploy →
 //   in the function's settings, turn OFF "Enforce JWT verification"
 //   (the cron caller authenticates with the shared secret below).
-// Secrets (in addition to the send-invites Twilio/Resend secrets):
+// Secrets (in addition to the send-invites messaging secrets — email
+// via SMTP_* or RESEND_*, texts via TWILIO_*):
 //   CRON_SECRET — any random string; must match supabase-cron.sql
 //   SITE_URL    — e.g. https://devtator.github.io/SmartThingsPublic/
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 
 const LEAD_MS = 60 * 60 * 1000; // remind when less than 1 hour remains
 
@@ -69,10 +71,35 @@ async function sendSms(to: string, message: string): Promise<{ ok: boolean; erro
   return { ok: r.ok, error: r.ok ? undefined : String(j.message ?? `Twilio ${r.status}`) };
 }
 
+// Send one email through SMTP when configured, else Resend.
 async function sendEmail(to: string, subject: string, message: string): Promise<{ ok: boolean; error?: string }> {
+  const smtpHost = Deno.env.get("SMTP_HOST");
+  if (smtpHost) {
+    const from = Deno.env.get("SMTP_FROM") ?? Deno.env.get("RESEND_FROM");
+    if (!from) return { ok: false, error: "SMTP_FROM not set" };
+    const port = Number(Deno.env.get("SMTP_PORT") ?? "587");
+    const username = Deno.env.get("SMTP_USER") ?? "";
+    const password = Deno.env.get("SMTP_PASS") ?? "";
+    const client = new SMTPClient({
+      connection: {
+        hostname: smtpHost,
+        port,
+        tls: port === 465, // implicit TLS on 465; 587 upgrades via STARTTLS
+        auth: username ? { username, password } : undefined,
+      },
+    });
+    try {
+      await client.send({ from, to, subject, content: message });
+      await client.close();
+      return { ok: true };
+    } catch (e) {
+      try { await client.close(); } catch (_) { /* ignore */ }
+      return { ok: false, error: "SMTP: " + (e instanceof Error ? e.message : String(e)) };
+    }
+  }
   const key = Deno.env.get("RESEND_API_KEY");
   const from = Deno.env.get("RESEND_FROM");
-  if (!key || !from) return { ok: false, error: "Resend secrets not configured" };
+  if (!key || !from) return { ok: false, error: "No email provider configured (set SMTP_* or RESEND_*)" };
   const r = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },

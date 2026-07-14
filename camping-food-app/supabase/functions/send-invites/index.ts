@@ -1,10 +1,10 @@
 // Campfire Kitchen — send-invites Edge Function.
 //
-// Sends camp-site invite texts (Twilio) and welcome emails (Resend),
-// keeping all credentials server-side (Supabase secrets) instead of
-// in the public config.js. Only signed-in chefs (per the
-// campfire_chefs table, checked via the campfire_is_chef RPC) may
-// call it.
+// Sends camp-site invite texts (Twilio) and welcome emails (your
+// SMTP provider, or Resend as a fallback), keeping all credentials
+// server-side (Supabase secrets) instead of in the public config.js.
+// Only signed-in chefs (per the campfire_chefs table, checked via
+// the campfire_is_chef RPC) may call it.
 //
 // Deploy (dashboard): Edge Functions → Deploy a new function →
 //   name it exactly `send-invites` → paste this file → Deploy.
@@ -13,19 +13,22 @@
 //   TWILIO_AUTH_TOKEN           — from the Twilio console
 //   TWILIO_FROM                 — your Twilio phone number (+1…)
 //     …or TWILIO_MESSAGING_SERVICE_SID instead of TWILIO_FROM.
-//   RESEND_API_KEY              — from resend.com, for email invites
-//   RESEND_FROM                 — sender, e.g. "Campfire Kitchen
-//     <onboarding@resend.dev>" (or your verified domain address)
+//   Email — set EITHER an SMTP server (recommended; the same creds
+//   you gave Supabase Auth's SMTP settings) OR Resend:
+//   SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / SMTP_FROM
+//     (port 465 = implicit TLS, 587 = STARTTLS; SMTP_FROM like
+//      "Campfire Kitchen <chef@yourdomain.com>")
+//   …or RESEND_API_KEY / RESEND_FROM (from resend.com).
 //
-// Either channel works without the other: missing Twilio secrets
-// fail only the phone invites, missing Resend secrets fail only the
-// email invites — each with a per-recipient error message.
+// Every channel is independent: a missing/failed channel fails only
+// its own recipients, each with a per-recipient error message.
 //
 // Request:  POST { phones: ["+1…"], emails: ["a@b.com"],
 //                  subject: "…", message: "…" }
 // Response: { results: [{ to, ok, error? }, …] }
 
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -38,6 +41,46 @@ function json(body: unknown, status: number): Response {
     status,
     headers: { ...CORS, "Content-Type": "application/json" },
   });
+}
+
+// Send one email through SMTP when configured, else Resend. Returns
+// a per-recipient {ok, error?} so one bad address never aborts the
+// batch.
+async function sendEmail(to: string, subject: string, message: string): Promise<{ ok: boolean; error?: string }> {
+  const smtpHost = Deno.env.get("SMTP_HOST");
+  if (smtpHost) {
+    const from = Deno.env.get("SMTP_FROM") ?? Deno.env.get("RESEND_FROM");
+    if (!from) return { ok: false, error: "SMTP_FROM not set" };
+    const port = Number(Deno.env.get("SMTP_PORT") ?? "587");
+    const username = Deno.env.get("SMTP_USER") ?? "";
+    const password = Deno.env.get("SMTP_PASS") ?? "";
+    const client = new SMTPClient({
+      connection: {
+        hostname: smtpHost,
+        port,
+        tls: port === 465, // implicit TLS on 465; 587 upgrades via STARTTLS
+        auth: username ? { username, password } : undefined,
+      },
+    });
+    try {
+      await client.send({ from, to, subject, content: message });
+      await client.close();
+      return { ok: true };
+    } catch (e) {
+      try { await client.close(); } catch (_) { /* ignore */ }
+      return { ok: false, error: "SMTP: " + (e instanceof Error ? e.message : String(e)) };
+    }
+  }
+  const key = Deno.env.get("RESEND_API_KEY");
+  const rFrom = Deno.env.get("RESEND_FROM");
+  if (!key || !rFrom) return { ok: false, error: "No email provider configured (set SMTP_* or RESEND_*)" };
+  const r = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ from: rFrom, to: [to], subject, text: message }),
+  });
+  const j = await r.json().catch(() => ({} as Record<string, unknown>));
+  return { ok: r.ok, error: r.ok ? undefined : String(j.message ?? `Resend error ${r.status}`) };
 }
 
 Deno.serve(async (req) => {
@@ -108,32 +151,13 @@ Deno.serve(async (req) => {
       });
     }
 
-    // --- Email invites via Resend ---
-    const resendKey = Deno.env.get("RESEND_API_KEY");
-    const resendFrom = Deno.env.get("RESEND_FROM");
+    // --- Email invites via SMTP (or Resend fallback) ---
     for (const to of emails.slice(0, 25)) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(to))) {
         results.push({ to: String(to), ok: false, error: "invalid email format" });
         continue;
       }
-      if (!resendKey || !resendFrom) {
-        results.push({ to: String(to), ok: false, error: "Resend secrets not configured" });
-        continue;
-      }
-      const r = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ from: resendFrom, to: [String(to)], subject, text: message }),
-      });
-      const j = await r.json().catch(() => ({} as Record<string, unknown>));
-      results.push({
-        to: String(to),
-        ok: r.ok,
-        error: r.ok ? undefined : String(j.message ?? `Resend error ${r.status}`),
-      });
+      results.push({ to: String(to), ...(await sendEmail(String(to), subject, message)) });
     }
 
     return json({ results }, 200);
