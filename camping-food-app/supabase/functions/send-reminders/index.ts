@@ -71,6 +71,15 @@ async function sendSms(to: string, message: string): Promise<{ ok: boolean; erro
   return { ok: r.ok, error: r.ok ? undefined : String(j.message ?? `Twilio ${r.status}`) };
 }
 
+// Reject instead of hanging forever (a hung SMTP send otherwise gets
+// killed as an opaque "EarlyDrop" with no useful error).
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${label} timed out after ${ms}ms`)), ms)),
+  ]);
+}
+
 // Send one email through SMTP when configured, else Resend.
 async function sendEmail(to: string, subject: string, message: string): Promise<{ ok: boolean; error?: string }> {
   const smtpHost = Deno.env.get("SMTP_HOST");
@@ -89,12 +98,15 @@ async function sendEmail(to: string, subject: string, message: string): Promise<
       },
     });
     try {
-      await client.send({ from, to, subject, content: message });
+      await withTimeout(client.send({ from, to, subject, content: message }), 20000, "SMTP send");
       await client.close();
+      console.log(`[email] sent to ${to} via SMTP (${smtpHost}:${port})`);
       return { ok: true };
     } catch (e) {
       try { await client.close(); } catch (_) { /* ignore */ }
-      return { ok: false, error: "SMTP: " + (e instanceof Error ? e.message : String(e)) };
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error(`[email] SMTP failed for ${to} (${smtpHost}:${port}): ${msg}`);
+      return { ok: false, error: "SMTP: " + msg };
     }
   }
   const key = Deno.env.get("RESEND_API_KEY");
@@ -164,6 +176,7 @@ Deno.serve(async (req) => {
     site.lastReminderFor = cutoff;
     dirChanged = true;
     report.push({ site: site.id, cutoff, results });
+    console.log(`[send-reminders] site ${site.id}:`, JSON.stringify(results));
   }
 
   if (dirChanged) {
