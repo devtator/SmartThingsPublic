@@ -500,6 +500,29 @@ const CFG = window.CAMPFIRE_CONFIG || {};
 const REMOTE = !!(CFG.supabaseUrl && CFG.supabaseAnonKey);
 const ALL_SLOTS = ["7:00 AM", "7:15 AM", "7:30 AM", "7:45 AM", "8:00 AM", "8:15 AM",
                    "8:30 AM", "8:45 AM", "9:00 AM", "9:15 AM", "9:30 AM"];
+const SLOT_INTERVALS = [10, 15, 20, 30, 60]; // minutes, chosen per meal
+
+// Time-slot helpers: slots are display strings like "7:15 AM".
+function slotToMin(s) {
+  const m = String(s).match(/(\d+):(\d+)\s*(AM|PM)/i);
+  if (!m) return 0;
+  let h = (+m[1]) % 12;
+  if (/pm/i.test(m[3])) h += 12;
+  return h * 60 + (+m[2]);
+}
+function minToSlot(mins) {
+  const h = Math.floor(mins / 60), mm = mins % 60;
+  const ap = h < 12 ? "AM" : "PM";
+  const hh = (h % 12) || 12;
+  return `${hh}:${String(mm).padStart(2, "0")} ${ap}`;
+}
+function genSlots(fromMin, toMin, interval) {
+  const out = [];
+  for (let t = fromMin; t <= toMin; t += interval) out.push(minToSlot(t));
+  return out;
+}
+function hhmmToMin(v) { const [h, m] = String(v).split(":").map(Number); return (h || 0) * 60 + (m || 0); }
+function minToHHMM(mins) { return `${String(Math.floor(mins / 60)).padStart(2, "0")}:${String(mins % 60).padStart(2, "0")}`; }
 
 /* ---------- Sample data set: summertime camp breakfast ---------- */
 function seedData() {
@@ -2097,9 +2120,43 @@ function removeOptionGroup(i) {
   renderGroupEditor();
 }
 
+/* Per-meal cook-time slots: the chef sets a From/To window and an
+ * interval, which generates the toggle grid; the meal stores both
+ * its chosen `slots` and the `slotConfig` used to build them. */
+let mealSlotSel = new Set();
+let mealSlotCfg = { from: 420, to: 570, interval: 15 }; // 7:00–9:30, 15 min
+
+function renderMealSlots() {
+  const wrap = $("#mSlots");
+  if (!wrap) return;
+  const gen = genSlots(mealSlotCfg.from, mealSlotCfg.to, mealSlotCfg.interval);
+  // keep any already-chosen slots that fall outside the current window
+  const extra = [...mealSlotSel].filter((s) => !gen.includes(s));
+  const all = [...new Set([...gen, ...extra])].sort((a, b) => slotToMin(a) - slotToMin(b));
+  wrap.innerHTML = all.length
+    ? all.map((s) => `<button type="button" data-slot="${s}" class="${mealSlotSel.has(s) ? "selected" : ""}">${s}</button>`).join("")
+    : `<span class="hint" style="margin:0">Set a valid From/To window above.</span>`;
+  wrap.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      if (mealSlotSel.has(b.dataset.slot)) mealSlotSel.delete(b.dataset.slot);
+      else mealSlotSel.add(b.dataset.slot);
+      b.classList.toggle("selected");
+    };
+  });
+}
+
 function openMealDialog(mealId) {
   const m = mealId ? mealById(mealId) : null;
-  const slots = m ? [...m.slots] : ["7:30 AM", "8:00 AM"];
+  const existing = m ? [...(m.slots || [])] : ["7:30 AM", "8:00 AM"];
+  mealSlotSel = new Set(existing);
+  if (m && m.slotConfig) {
+    mealSlotCfg = { from: m.slotConfig.from, to: m.slotConfig.to, interval: m.slotConfig.interval };
+  } else if (m && existing.length) {
+    const mins = existing.map(slotToMin);
+    mealSlotCfg = { from: Math.min(...mins), to: Math.max(...mins), interval: 15 };
+  } else {
+    mealSlotCfg = { from: 420, to: 570, interval: 15 };
+  }
   pendingPhoto = m ? m.photo : null;
   pendingGroups = (m && m.optionGroups || []).map((g) => ({
     name: g.name, type: g.type, choicesText: g.choices.join(", "),
@@ -2124,10 +2181,19 @@ function openMealDialog(mealId) {
       <div id="mPhotoPreview"></div>
     </div>
     <div class="field">
-      <label>Cook time slots</label>
-      <div class="slot-picker" id="mSlots">
-        ${ALL_SLOTS.map((s) => `<button type="button" data-slot="${s}" class="${slots.includes(s) ? "selected" : ""}">${s}</button>`).join("")}
+      <label>Cook time slots — set the window and interval, then tap the times you'll cook</label>
+      <div class="row" style="gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <label class="hint" style="margin:0;display:flex;align-items:center;gap:4px">From
+          <input type="time" id="mSlotFrom" value="${minToHHMM(mealSlotCfg.from)}" style="width:auto"></label>
+        <label class="hint" style="margin:0;display:flex;align-items:center;gap:4px">to
+          <input type="time" id="mSlotTo" value="${minToHHMM(mealSlotCfg.to)}" style="width:auto"></label>
+        <label class="hint" style="margin:0;display:flex;align-items:center;gap:4px">every
+          <select id="mSlotInterval" style="width:auto">
+            ${SLOT_INTERVALS.map((n) => `<option value="${n}" ${n === mealSlotCfg.interval ? "selected" : ""}>${n} min</option>`).join("")}
+          </select>
+        </label>
       </div>
+      <div class="slot-picker" id="mSlots"></div>
     </div>
     <div class="field">
       <label>Camper options (optional) — e.g. Bread: Bagel, Wrap, Toast</label>
@@ -2139,20 +2205,28 @@ function openMealDialog(mealId) {
       <button class="btn green" onclick="saveMeal(${m ? `'${m.id}'` : "null"})">Save meal</button>
     </div>
   `;
-  dlg.querySelectorAll("#mSlots button").forEach((b) => {
-    b.onclick = () => b.classList.toggle("selected");
-  });
+  const applyCfg = () => {
+    mealSlotCfg.from = hhmmToMin($("#mSlotFrom").value || "07:00");
+    mealSlotCfg.to = hhmmToMin($("#mSlotTo").value || "09:30");
+    mealSlotCfg.interval = +$("#mSlotInterval").value || 15;
+    if (mealSlotCfg.to < mealSlotCfg.from) mealSlotCfg.to = mealSlotCfg.from;
+    renderMealSlots();
+  };
+  $("#mSlotFrom").addEventListener("change", applyCfg);
+  $("#mSlotTo").addEventListener("change", applyCfg);
+  $("#mSlotInterval").addEventListener("change", applyCfg);
   $("#mPhoto").addEventListener("change", handlePhotoInput);
   wireEmojiPicker("mEmojiPick", "mEmoji");
   renderPhotoPreview();
   renderGroupEditor();
+  renderMealSlots();
   dlg.showModal();
 }
 
 function saveMeal(mealId) {
   const name = $("#mName").value.trim();
   if (!name) { toast("Give the meal a name"); return; }
-  const slots = [...document.querySelectorAll("#mSlots button.selected")].map((b) => b.dataset.slot);
+  const slots = [...mealSlotSel].sort((a, b) => slotToMin(a) - slotToMin(b));
   if (!slots.length) { toast("Pick at least one cook time slot"); return; }
   const data = {
     name,
@@ -2161,6 +2235,7 @@ function saveMeal(mealId) {
     desc: $("#mDesc").value.trim(),
     price: Math.max(0, parseFloat($("#mPrice").value) || 0),
     slots,
+    slotConfig: { ...mealSlotCfg },
     photo: pendingPhoto,
     optionGroups: pendingGroups
       .map((g) => ({
