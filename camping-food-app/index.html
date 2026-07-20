@@ -179,6 +179,7 @@
     color: var(--ink-soft);
   }
   .chip.slot { background: #eef4ee; border-color: #cfe0d2; color: var(--pine-dark); }
+  .chip.togo { background: var(--pend-bg); border-color: #ecd9ac; color: var(--pend); font-weight: 700; }
   .btn {
     border: none;
     border-radius: 10px;
@@ -1535,6 +1536,7 @@ function camperView() {
         <div class="order-line">
           <span>${m.emoji}</span>
           <span class="who">${o.qty}× ${esc(m.name)}</span>
+          ${o.toGo ? `<span class="chip togo">🥡 To go</span>` : ""}
           ${opts ? `<span class="chip">${esc(opts)}</span>` : ""}
           <span class="pref">preferred ${o.preferred}</span>
           ${tail}
@@ -1612,6 +1614,7 @@ function chefView() {
             <div class="order-line">
               <span class="who">${esc(o.camper)}</span>
               <span>${o.qty}×</span>
+              ${o.toGo ? `<span class="chip togo">🥡 To go</span>` : ""}
               <span class="status confirmed">Pickup ${o.confirmedSlot}</span>
             </div>`).join("")}
           <div class="row">
@@ -1646,6 +1649,7 @@ function chefView() {
               <span>${o.mealEmoji || "🍽️"}</span>
               <span class="who">${esc(o.camper)}</span>
               <span>${o.qty}× ${esc(o.mealName || "")}</span>
+              ${o.toGo ? `<span class="chip togo">🥡 To go</span>` : ""}
               <span class="status ${o.status}">${o.status}</span>
               ${optSummary(o) ? `<span class="chip">${esc(optSummary(o))}</span>` : ""}
               ${o.review ? `<span class="stars">${starStr(o.review.rating)}</span>` : ""}
@@ -1724,6 +1728,7 @@ function chefOrderGroup({ meal, orders }) {
           <span class="who">${esc(o.camper)}</span>
           <span>${o.qty}×</span>
           <span class="pref">prefers ${o.preferred}</span>
+          ${o.toGo ? `<span class="chip togo">🥡 To go</span>` : ""}
           ${Object.entries(o.options || {}).map(([g, cs]) =>
             `<span class="chip">${esc(g)}: ${esc(cs.join(", "))}</span>`).join("")}
           ${o.notes ? `<span class="chip">📝 ${esc(o.notes)}</span>` : ""}
@@ -2029,6 +2034,13 @@ function openOrderDialog(mealId) {
       <input type="number" id="dlgQty" min="1" max="10" value="1">
     </div>
     <div class="field">
+      <label>Dining</label>
+      <div class="slot-picker" id="dlgDining">
+        <button type="button" data-togo="0" class="selected">🍽️ Eat at camp</button>
+        <button type="button" data-togo="1">🥡 To go</button>
+      </div>
+    </div>
+    <div class="field">
       <label>Notes for the chef (optional)</label>
       <input type="text" id="dlgNotes" placeholder="e.g. no cheese, extra crispy…">
     </div>
@@ -2057,6 +2069,13 @@ function openOrderDialog(mealId) {
         }
       };
     });
+  });
+  // Dining choice (eat at camp / to go) — radio behavior.
+  dlg.querySelectorAll("#dlgDining button").forEach((b) => {
+    b.onclick = () => {
+      dlg.querySelectorAll("#dlgDining button").forEach((x) => x.classList.remove("selected"));
+      b.classList.add("selected");
+    };
   });
   dlg.showModal();
 }
@@ -2091,14 +2110,15 @@ function placeOrder(mealId) {
   const slot = dialogSlot;
   const camperId = myId();
   const options = collectDialogOptions(mealById(mealId) || {});
+  const toGo = !!document.querySelector('#dlgDining button[data-togo="1"].selected');
   commit((s) => {
     const meal = s.meals.find((m) => m.id === mealId);
     if (!meal) return;
     s.orders.push({
       id: uid("o"), mealId, camper: name, camperId, qty,
-      preferred: slot, notes, options, status: "pending", confirmedSlot: null, review: null,
+      preferred: slot, notes, options, toGo, status: "pending", confirmedSlot: null, review: null,
     });
-    notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot}).${notes ? " Note: " + notes : ""}`);
+    notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot})${toGo ? " 🥡 to go" : ""}.${notes ? " Note: " + notes : ""}`);
   }).then((ok) => {
     if (ok) toast(`Order placed for tomorrow! The chef will confirm the pickup time.`);
   });
