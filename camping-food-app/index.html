@@ -126,6 +126,44 @@
   }
   .card.unavailable { opacity: 0.55; }
   .meal-head { display: flex; align-items: flex-start; gap: 10px; }
+  .fav-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.4rem;
+    line-height: 1;
+    color: #d8cdb8;
+    padding: 0 2px;
+    align-self: flex-start;
+  }
+  .fav-btn.on { color: var(--sun); }
+  .fav-btn:hover { transform: scale(1.12); }
+  .fav-filter {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1.5px solid var(--line);
+    background: #fff;
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: var(--ink-soft);
+    cursor: pointer;
+    margin-bottom: 14px;
+  }
+  .fav-filter.on { background: var(--sun); border-color: var(--sun); color: var(--ink); }
+  .reorder-btns { display: flex; flex-direction: column; gap: 2px; }
+  .reorder-btns button {
+    background: var(--cream);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.7rem;
+    line-height: 1;
+    padding: 3px 6px;
+  }
+  .reorder-btns button:disabled { opacity: 0.35; cursor: default; }
   .meal-emoji { font-size: 1.9rem; line-height: 1; }
   .meal-name { font-weight: 700; font-size: 1rem; }
   .meal-cat { font-size: 0.72rem; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.6px; }
@@ -713,6 +751,7 @@ function loadPrefs() {
   // In live-sync mode campers must type their real name first.
   if (!p) p = { role: "camper", camperName: REMOTE ? "" : "Riley" };
   if (!p.siteId) p.siteId = 1;
+  if (!p.favorites) p.favorites = {}; // personal, per-device: { "siteId:mealId": true }
   // An invite link (?site=N) drops the user straight into that camp site.
   const urlSite = parseInt(new URLSearchParams(location.search).get("site"), 10);
   if (urlSite > 0) p.siteId = urlSite;
@@ -722,6 +761,19 @@ function loadPrefs() {
 function currentSite() {
   return directory && directory.sites.find((s) => s.id === prefs.siteId) || null;
 }
+
+/* --------- favorites (personal, per device) + filter ------------ */
+let favFilter = false; // session-only: reset each load so the menu isn't mysteriously empty
+function favKey(mealId) { return prefs.siteId + ":" + mealId; }
+function isFav(mealId) { return !!(prefs.favorites && prefs.favorites[favKey(mealId)]); }
+function toggleFav(mealId) {
+  if (!prefs.favorites) prefs.favorites = {};
+  const k = favKey(mealId);
+  if (prefs.favorites[k]) delete prefs.favorites[k]; else prefs.favorites[k] = true;
+  savePrefs();
+  render();
+}
+function toggleFavFilter() { favFilter = !favFilter; render(); }
 
 /* --------------- per-site membership & chefs --------------------
  * A site is visible only to its people: invited contacts, invite-
@@ -1412,6 +1464,8 @@ function camperView() {
   const myOrders = state.orders.filter((o) => mine.includes(o.camperId || o.camper));
   const myNotifs = state.notifications.filter((n) => mine.includes(n.to) || n.to === "all");
   const avail = state.meals.filter((m) => m.available);
+  const favCount = avail.filter((m) => isFav(m.id)).length;
+  const shown = favFilter ? avail.filter((m) => isFav(m.id)) : avail;
   const closed = orderingClosed();
 
   return `
@@ -1432,8 +1486,9 @@ function camperView() {
     </div>` : ""}
     <div class="section-title">🌅 Tomorrow's breakfast menu</div>
     <p class="hint">Order today for tomorrow morning — no same-day ordering. Pick a meal and your preferred pickup time; after ordering closes, the chef confirms one cook time for everyone.</p>
+    ${favCount || favFilter ? `<button class="fav-filter ${favFilter ? "on" : ""}" onclick="toggleFavFilter()">${favFilter ? "★ Showing favorites" : "☆ Favorites only"} (${favCount})</button>` : ""}
     <div class="cards">
-      ${avail.map((m) => `
+      ${shown.map((m) => `
         <div class="card">
           ${m.photo ? `<img class="meal-photo" src="${m.photo}" alt="${esc(m.name)}">` : ""}
           <div class="meal-head">
@@ -1442,6 +1497,8 @@ function camperView() {
               <div class="meal-name">${esc(m.name)}</div>
               <div class="meal-cat">${esc(m.category)}</div>
             </div>
+            <span class="spacer"></span>
+            <button class="fav-btn ${isFav(m.id) ? "on" : ""}" onclick="toggleFav('${m.id}')" title="${isFav(m.id) ? "Remove favorite" : "Add to favorites"}">${isFav(m.id) ? "★" : "☆"}</button>
           </div>
           <div class="meal-desc">${esc(m.desc)}</div>
           <div class="meal-meta">
@@ -1454,7 +1511,7 @@ function camperView() {
             ? `<button class="btn ghost" disabled>🌙 Ordering closed</button>`
             : `<button class="btn primary" onclick="openOrderDialog('${m.id}')">Order</button>`}
         </div>
-      `).join("") || `<div class="empty">The chef hasn't posted any meals yet — check back soon!</div>`}
+      `).join("") || `<div class="empty">${favFilter ? "No favorites yet — tap the ☆ on a meal to save it here." : "The chef hasn't posted any meals yet — check back soon!"}</div>`}
     </div>
 
     <div class="section-title">🧾 My orders</div>
@@ -1597,12 +1654,16 @@ function chefView() {
       }).join("")}` : ""}
 
     <div class="section-title">🍳 My meals &amp; cook times</div>
-    <p class="hint">Toggle what's on the menu and set the time slots you're willing to cook.</p>
+    <p class="hint">Reorder with ▲▼ (changes the order campers see too), toggle what's on the menu, and set your cook times.</p>
     <div class="cards">
-      ${state.meals.map((m) => `
+      ${state.meals.map((m, i) => `
         <div class="card ${m.available ? "" : "unavailable"}">
           ${m.photo ? `<img class="meal-photo" src="${m.photo}" alt="${esc(m.name)}">` : ""}
           <div class="meal-head">
+            <span class="reorder-btns">
+              <button onclick="moveMeal('${m.id}', -1)" ${i === 0 ? "disabled" : ""} title="Move up" aria-label="Move up">▲</button>
+              <button onclick="moveMeal('${m.id}', 1)" ${i === state.meals.length - 1 ? "disabled" : ""} title="Move down" aria-label="Move down">▼</button>
+            </span>
             <span class="meal-emoji">${m.emoji}</span>
             <div>
               <div class="meal-name">${esc(m.name)}</div>
@@ -1746,6 +1807,17 @@ function toggleAvail(id) {
     if (!ok || onMenu === undefined) return;
     const m = mealById(id);
     toast(onMenu ? `${m.name} is back on the menu` : `${m.name} removed from the menu`);
+  });
+}
+
+// Reorder a meal in the shared list — reflected in the chef's and
+// campers' menus alike. Chef-only (a menu change).
+function moveMeal(id, dir) {
+  commit((s) => {
+    const i = s.meals.findIndex((x) => x.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= s.meals.length) return;
+    [s.meals[i], s.meals[j]] = [s.meals[j], s.meals[i]];
   });
 }
 
