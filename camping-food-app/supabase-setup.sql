@@ -305,7 +305,8 @@ begin
     if coalesce(v_old.data->'history', '[]'::jsonb) is distinct from coalesce(p_data->'history', '[]'::jsonb)
        or (v_old.data->'day') is distinct from (p_data->'day')
        or coalesce(v_old.data->'cutoffTime', '""'::jsonb) is distinct from coalesce(p_data->'cutoffTime', '""'::jsonb)
-       or coalesce(v_old.data->'orderingOverride', 'null'::jsonb) is distinct from coalesce(p_data->'orderingOverride', 'null'::jsonb) then
+       or coalesce(v_old.data->'orderingOverride', 'null'::jsonb) is distinct from coalesce(p_data->'orderingOverride', 'null'::jsonb)
+       or coalesce(v_old.data->'dayNote', '""'::jsonb) is distinct from coalesce(p_data->'dayNote', '""'::jsonb) then
       raise exception 'only the chef can change kitchen settings';
     end if;
     if exists (
