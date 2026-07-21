@@ -1,4 +1,7 @@
--- Campfire Kitchen database setup (v6).
+-- Campfire Kitchen database setup (v7).
+-- v7: per-user profile store (campfire_profiles) — allergies,
+-- favorites, and a settings bag, keyed to the auth user so they
+-- follow a camper across devices and their linked phone/email.
 -- v4: users may sign in with a phone number OR an email (or link
 -- both to one account) — chef checks and order ownership accept
 -- either identity.
@@ -359,3 +362,23 @@ grant execute on function public.campfire_join(integer) to authenticated;
 create policy "campfire auth select" on public.campfire_state
   for select to authenticated
   using (id <= 1 or public.campfire_is_chef() or public.campfire_is_member(id));
+
+-- ------------------------------------------------------------------
+-- Per-user profile: one row per auth user, holding their allergies,
+-- favorites, and a free-form settings object. Keyed to the account,
+-- so it follows the camper across devices and their linked
+-- phone/email. Each user reads/writes ONLY their own row (RLS).
+create table if not exists public.campfire_profiles (
+  user_id    uuid primary key references auth.users(id) on delete cascade,
+  data       jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now()
+);
+alter table public.campfire_profiles enable row level security;
+
+drop policy if exists "campfire profile self" on public.campfire_profiles;
+create policy "campfire profile self" on public.campfire_profiles
+  for all to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
+
+grant select, insert, update, delete on public.campfire_profiles to authenticated;

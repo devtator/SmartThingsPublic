@@ -776,9 +776,8 @@ function loadPrefs() {
   // In live-sync mode campers must type their real name first.
   if (!p) p = { role: "camper", camperName: REMOTE ? "" : "Riley" };
   if (!p.siteId) p.siteId = 1;
-  if (!p.favorites) p.favorites = {}; // personal, per-device: { "siteId:mealId": true }
-  if (!p.allergyChecked) p.allergyChecked = {}; // { "Peanuts": true, ... }
-  if (p.allergyOther === undefined) p.allergyOther = "";
+  // favorites/allergies moved to the per-user profile store (below);
+  // any left here are migrated up on load.
   // An invite link (?site=N) drops the user straight into that camp site.
   const urlSite = parseInt(new URLSearchParams(location.search).get("site"), 10);
   if (urlSite > 0) p.siteId = urlSite;
@@ -789,41 +788,115 @@ function currentSite() {
   return directory && directory.sites.find((s) => s.id === prefs.siteId) || null;
 }
 
-/* --------- favorites (personal, per device) + filter ------------ */
+/* ---------------- per-user profile (server-stored) --------------
+ * Allergies, favorites, and a free-form `settings` bag live in one
+ * profile keyed to the AUTH USER (campfire_profiles), so they follow
+ * a camper across devices and across their linked phone/email. A
+ * local cache gives instant reads and offline resilience; in
+ * device-demo mode the cache is the only store. Extensible: add
+ * notification prefs etc. under `settings` later. */
+const PROFILE_URL = REMOTE ? `${CFG.supabaseUrl.replace(/\/$/, "")}/rest/v1/campfire_profiles` : null;
+let profile = emptyProfile();
+
+function emptyProfile() { return { favorites: {}, allergyChecked: {}, allergyOther: "", settings: {} }; }
+function normalizeProfile(d) {
+  d = d || {};
+  return {
+    favorites: d.favorites || {},
+    allergyChecked: d.allergyChecked || {},
+    allergyOther: d.allergyOther || "",
+    settings: d.settings || {},
+  };
+}
+function profileCacheKey() {
+  return "campfire-profile-v1:" + (REMOTE && session ? session.user.id : "demo");
+}
+function loadLocalProfile() {
+  try {
+    const raw = localStorage.getItem(profileCacheKey());
+    if (raw) return normalizeProfile(JSON.parse(raw));
+  } catch (e) { /* fall through */ }
+  return null;
+}
+function saveLocalProfile() {
+  try { localStorage.setItem(profileCacheKey(), JSON.stringify(profile)); } catch (e) { /* non-fatal */ }
+}
+
+// One-time lift of favorites/allergies that used to live in the
+// per-device prefs blob into the profile.
+function migrateLegacyPrefs() {
+  let changed = false;
+  if (prefs.favorites && Object.keys(prefs.favorites).length && !Object.keys(profile.favorites).length) {
+    profile.favorites = { ...prefs.favorites }; changed = true;
+  }
+  if (prefs.allergyChecked && Object.keys(prefs.allergyChecked).length && !Object.keys(profile.allergyChecked).length) {
+    profile.allergyChecked = { ...prefs.allergyChecked }; changed = true;
+  }
+  if (prefs.allergyOther && !profile.allergyOther) { profile.allergyOther = prefs.allergyOther; changed = true; }
+  if (changed) { delete prefs.favorites; delete prefs.allergyChecked; delete prefs.allergyOther; savePrefs(); }
+  return changed;
+}
+
+async function loadProfile() {
+  profile = loadLocalProfile() || emptyProfile();
+  if (!REMOTE || !session) { migrateLegacyPrefs(); saveLocalProfile(); return; }
+  try {
+    const res = await fetch(`${PROFILE_URL}?user_id=eq.${session.user.id}&select=data`, { headers: sbHeaders() });
+    if (res.ok) {
+      const rows = await res.json();
+      if (rows[0] && rows[0].data) profile = normalizeProfile(rows[0].data);
+    }
+  } catch (e) { /* keep local cache */ }
+  if (migrateLegacyPrefs()) await saveProfile(); // push migrated data up
+  else saveLocalProfile();
+}
+
+async function saveProfile() {
+  saveLocalProfile();
+  if (!REMOTE || !session) return;
+  try {
+    await fetch(PROFILE_URL, {
+      method: "POST",
+      headers: { ...sbHeaders(), Prefer: "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ user_id: session.user.id, data: profile }),
+    });
+  } catch (e) { /* cached locally; resyncs on the next save */ }
+}
+
+/* --------- favorites (per user, in the profile) + filter -------- */
 let favFilter = false; // session-only: reset each load so the menu isn't mysteriously empty
 function favKey(mealId) { return prefs.siteId + ":" + mealId; }
-function isFav(mealId) { return !!(prefs.favorites && prefs.favorites[favKey(mealId)]); }
+function isFav(mealId) { return !!(profile.favorites && profile.favorites[favKey(mealId)]); }
 function toggleFav(mealId) {
-  if (!prefs.favorites) prefs.favorites = {};
   const k = favKey(mealId);
-  if (prefs.favorites[k]) delete prefs.favorites[k]; else prefs.favorites[k] = true;
-  savePrefs();
+  if (profile.favorites[k]) delete profile.favorites[k]; else profile.favorites[k] = true;
+  saveProfile();
   render();
 }
 function toggleFavFilter() { favFilter = !favFilter; render(); }
 
-/* --------- food allergies (personal, per device) --------------- */
+/* --------- food allergies (personal, in the profile) ----------- */
 const COMMON_ALLERGENS = ["Peanuts", "Tree nuts", "Dairy", "Eggs",
                           "Gluten/Wheat", "Soy", "Fish", "Shellfish", "Sesame"];
 function allergyList() {
-  const checked = Object.keys(prefs.allergyChecked || {}).filter((k) => prefs.allergyChecked[k]);
-  const other = (prefs.allergyOther || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const checked = Object.keys(profile.allergyChecked || {}).filter((k) => profile.allergyChecked[k]);
+  const other = (profile.allergyOther || "").split(",").map((s) => s.trim()).filter(Boolean);
   return [...checked, ...other];
 }
 function openAllergyDialog() {
   const dlg = $("#allergyDialog");
   dlg.innerHTML = `
     <h3>⚠️ Your food allergies</h3>
-    <div class="sub">Saved on this device and sent to the chef with every order you place — a reminder on each ticket.</div>
+    <div class="sub">Saved to your account (carries across your devices) and sent to the chef with every order you place — a reminder on each ticket.</div>
     <div class="field">
       <div class="allergy-grid">
         ${COMMON_ALLERGENS.map((a) => `
-          <label class="allergy-check"><input type="checkbox" data-a="${esc(a)}" ${prefs.allergyChecked && prefs.allergyChecked[a] ? "checked" : ""}> ${esc(a)}</label>`).join("")}
+          <label class="allergy-check"><input type="checkbox" data-a="${esc(a)}" ${profile.allergyChecked && profile.allergyChecked[a] ? "checked" : ""}> ${esc(a)}</label>`).join("")}
       </div>
     </div>
     <div class="field">
       <label>Anything else? (comma-separated)</label>
-      <input type="text" id="allergyOther" value="${esc(prefs.allergyOther || "")}" placeholder="e.g. kiwi, cilantro">
+      <input type="text" id="allergyOther" value="${esc(profile.allergyOther || "")}" placeholder="e.g. kiwi, cilantro">
     </div>
     <div class="row" style="justify-content:flex-end">
       <button class="btn ghost" onclick="document.getElementById('allergyDialog').close()">Cancel</button>
@@ -836,9 +909,9 @@ function saveAllergies() {
   document.querySelectorAll("#allergyDialog .allergy-check input").forEach((cb) => {
     if (cb.checked) checked[cb.dataset.a] = true;
   });
-  prefs.allergyChecked = checked;
-  prefs.allergyOther = $("#allergyOther").value.trim();
-  savePrefs();
+  profile.allergyChecked = checked;
+  profile.allergyOther = $("#allergyOther").value.trim();
+  saveProfile();
   $("#allergyDialog").close();
   const n = allergyList().length;
   toast(n ? `⚠️ ${n} allerg${n === 1 ? "y" : "ies"} saved — sent with every order` : "Allergies cleared");
@@ -3061,6 +3134,7 @@ async function startApp() {
   $("#app").innerHTML = `<div class="empty">⛺ Connecting to the camp kitchen…</div>`;
   try {
     await refreshChefStatus();
+    await loadProfile();
     await remoteInit();
     setSyncPill("ok");
     render();
@@ -3084,6 +3158,7 @@ async function init() {
   if (!REMOTE) {
     directory = seedDirectory();
     prefs.siteId = 1; // device-only demo is single-site
+    await loadProfile();
     state = loadLocal();
     render();
     return;
