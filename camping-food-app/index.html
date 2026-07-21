@@ -183,6 +183,12 @@
   .chip.allergy { background: #fde3e1; border-color: #f2b3ae; color: #b23b34; font-weight: 700; }
   .allergy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px; }
   .allergy-check { display: flex; align-items: center; gap: 7px; font-size: 0.9rem; cursor: pointer; }
+  .ordered-count { color: var(--pine); font-weight: 700; }
+  .history-list { max-height: 340px; overflow-y: auto; margin: 8px 0; display: flex; flex-direction: column; gap: 2px; }
+  .history-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+  .history-row:last-child { border-bottom: none; }
+  .history-meal { font-weight: 600; }
+  .history-meta { color: var(--ink-soft); font-size: 0.85rem; white-space: nowrap; }
   .btn {
     border: none;
     border-radius: 10px;
@@ -516,6 +522,7 @@
 <dialog id="noteDialog"></dialog>
 <dialog id="dayNoteDialog"></dialog>
 <dialog id="allergyDialog"></dialog>
+<dialog id="historyDialog"></dialog>
 <dialog id="siteSettingsDialog"></dialog>
 <div class="toast" id="toast"></div>
 
@@ -798,13 +805,14 @@ function currentSite() {
 const PROFILE_URL = REMOTE ? `${CFG.supabaseUrl.replace(/\/$/, "")}/rest/v1/campfire_profiles` : null;
 let profile = emptyProfile();
 
-function emptyProfile() { return { favorites: {}, allergyChecked: {}, allergyOther: "", settings: {} }; }
+function emptyProfile() { return { favorites: {}, allergyChecked: {}, allergyOther: "", history: [], settings: {} }; }
 function normalizeProfile(d) {
   d = d || {};
   return {
     favorites: d.favorites || {},
     allergyChecked: d.allergyChecked || {},
     allergyOther: d.allergyOther || "",
+    history: Array.isArray(d.history) ? d.history : [],
     settings: d.settings || {},
   };
 }
@@ -916,6 +924,54 @@ function saveAllergies() {
   const n = allergyList().length;
   toast(n ? `⚠️ ${n} allerg${n === 1 ? "y" : "ies"} saved — sent with every order` : "Allergies cleared");
   render();
+}
+
+/* --------- personal order history (per user, in the profile) -----
+ * Every order a camper places is logged to their own profile so it
+ * follows them across devices. Kept newest-first, capped at 100. */
+const HISTORY_CAP = 100;
+function recordHistory(entry) {
+  profile.history = [entry, ...(profile.history || [])].slice(0, HISTORY_CAP);
+  saveProfile();
+}
+// { mealId -> times ordered } across the camper's whole history.
+function historyCounts() {
+  const counts = {};
+  for (const h of profile.history || []) counts[h.mealId] = (counts[h.mealId] || 0) + 1;
+  return counts;
+}
+function mealOrderCount(mealId) { return historyCounts()[mealId] || 0; }
+function openHistoryDialog() {
+  const dlg = $("#historyDialog");
+  const hist = profile.history || [];
+  const counts = historyCounts();
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([id, c]) => {
+      const h = hist.find((x) => x.mealId === id);
+      return `${esc(h ? h.mealName : id)} ×${c}`;
+    });
+  dlg.innerHTML = `
+    <h3>📜 Your order history</h3>
+    <div class="sub">Saved to your account, so it follows you across devices.</div>
+    ${top.length ? `<div class="field"><strong>Most ordered:</strong> ${top.join(" · ")}</div>` : ""}
+    <div class="history-list">
+      ${hist.length ? hist.map((h) => `
+        <div class="history-row">
+          <span class="history-meal">${esc(h.mealName)}${h.qty > 1 ? ` ×${h.qty}` : ""}${h.toGo ? " 🥡" : ""}</span>
+          <span class="history-meta">${esc(h.siteName || "")}${h.siteName ? " · " : ""}${esc(fmtHistDate(h.at))}</span>
+        </div>`).join("")
+        : `<div class="sub">No orders yet — place your first breakfast order!</div>`}
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('historyDialog').close()">Close</button>
+    </div>`;
+  dlg.showModal();
+}
+function fmtHistDate(ts) {
+  if (!ts) return "";
+  try {
+    return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  } catch (e) { return ""; }
 }
 
 /* --------------- per-site membership & chefs --------------------
@@ -1623,6 +1679,7 @@ function camperView() {
       <span class="label">🎒 Ordering as:</span>
       <input type="text" id="camperName" value="${esc(prefs.camperName)}" placeholder="Your name">
       <button class="link-btn" onclick="openAllergyDialog()">⚠️ Allergies${allergyList().length ? ` (${allergyList().length})` : ""}</button>
+      <button class="link-btn" onclick="openHistoryDialog()">📜 History${(profile.history || []).length ? ` (${profile.history.length})` : ""}</button>
       ${REMOTE && session
         ? `<span class="account-line">${myId().startsWith("+") ? "📱" : "✉️"} ${esc(myIdLabel())}
              <button class="link-btn" onclick="openAccountDialog()">Account</button>
@@ -1646,7 +1703,7 @@ function camperView() {
             <span class="meal-emoji">${m.emoji}</span>
             <div>
               <div class="meal-name">${esc(m.name)}</div>
-              <div class="meal-cat">${esc(m.category)}</div>
+              <div class="meal-cat">${esc(m.category)}${mealOrderCount(m.id) ? ` · <span class="ordered-count">ordered ${mealOrderCount(m.id)}×</span>` : ""}</div>
             </div>
             <span class="spacer"></span>
             <button class="fav-btn ${isFav(m.id) ? "on" : ""}" onclick="toggleFav('${m.id}')" title="${isFav(m.id) ? "Remove favorite" : "Add to favorites"}">${isFav(m.id) ? "★" : "☆"}</button>
@@ -2277,7 +2334,14 @@ function placeOrder(mealId) {
     });
     notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot})${toGo ? " 🥡 to go" : ""}.${notes ? " Note: " + notes : ""}${allergies.length ? ` ⚠️ Allergies: ${allergies.join(", ")}` : ""}`);
   }).then((ok) => {
-    if (ok) toast(`Order placed for tomorrow! The chef will confirm the pickup time.`);
+    if (ok) {
+      const meal = mealById(mealId);
+      recordHistory({
+        at: Date.now(), mealId, mealName: meal ? meal.name : mealId, qty,
+        toGo, slot, siteId: prefs.siteId, siteName: (currentSite() || {}).name || "",
+      });
+      toast(`Order placed for tomorrow! The chef will confirm the pickup time.`);
+    }
   });
   $("#orderDialog").close();
 }
