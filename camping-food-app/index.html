@@ -180,6 +180,9 @@
   }
   .chip.slot { background: #eef4ee; border-color: #cfe0d2; color: var(--pine-dark); }
   .chip.togo { background: var(--pend-bg); border-color: #ecd9ac; color: var(--pend); font-weight: 700; }
+  .chip.allergy { background: #fde3e1; border-color: #f2b3ae; color: #b23b34; font-weight: 700; }
+  .allergy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px; }
+  .allergy-check { display: flex; align-items: center; gap: 7px; font-size: 0.9rem; cursor: pointer; }
   .btn {
     border: none;
     border-radius: 10px;
@@ -512,6 +515,7 @@
 <dialog id="accountDialog"></dialog>
 <dialog id="noteDialog"></dialog>
 <dialog id="dayNoteDialog"></dialog>
+<dialog id="allergyDialog"></dialog>
 <dialog id="siteSettingsDialog"></dialog>
 <div class="toast" id="toast"></div>
 
@@ -773,6 +777,8 @@ function loadPrefs() {
   if (!p) p = { role: "camper", camperName: REMOTE ? "" : "Riley" };
   if (!p.siteId) p.siteId = 1;
   if (!p.favorites) p.favorites = {}; // personal, per-device: { "siteId:mealId": true }
+  if (!p.allergyChecked) p.allergyChecked = {}; // { "Peanuts": true, ... }
+  if (p.allergyOther === undefined) p.allergyOther = "";
   // An invite link (?site=N) drops the user straight into that camp site.
   const urlSite = parseInt(new URLSearchParams(location.search).get("site"), 10);
   if (urlSite > 0) p.siteId = urlSite;
@@ -795,6 +801,49 @@ function toggleFav(mealId) {
   render();
 }
 function toggleFavFilter() { favFilter = !favFilter; render(); }
+
+/* --------- food allergies (personal, per device) --------------- */
+const COMMON_ALLERGENS = ["Peanuts", "Tree nuts", "Dairy", "Eggs",
+                          "Gluten/Wheat", "Soy", "Fish", "Shellfish", "Sesame"];
+function allergyList() {
+  const checked = Object.keys(prefs.allergyChecked || {}).filter((k) => prefs.allergyChecked[k]);
+  const other = (prefs.allergyOther || "").split(",").map((s) => s.trim()).filter(Boolean);
+  return [...checked, ...other];
+}
+function openAllergyDialog() {
+  const dlg = $("#allergyDialog");
+  dlg.innerHTML = `
+    <h3>⚠️ Your food allergies</h3>
+    <div class="sub">Saved on this device and sent to the chef with every order you place — a reminder on each ticket.</div>
+    <div class="field">
+      <div class="allergy-grid">
+        ${COMMON_ALLERGENS.map((a) => `
+          <label class="allergy-check"><input type="checkbox" data-a="${esc(a)}" ${prefs.allergyChecked && prefs.allergyChecked[a] ? "checked" : ""}> ${esc(a)}</label>`).join("")}
+      </div>
+    </div>
+    <div class="field">
+      <label>Anything else? (comma-separated)</label>
+      <input type="text" id="allergyOther" value="${esc(prefs.allergyOther || "")}" placeholder="e.g. kiwi, cilantro">
+    </div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn ghost" onclick="document.getElementById('allergyDialog').close()">Cancel</button>
+      <button class="btn green" onclick="saveAllergies()">Save</button>
+    </div>`;
+  dlg.showModal();
+}
+function saveAllergies() {
+  const checked = {};
+  document.querySelectorAll("#allergyDialog .allergy-check input").forEach((cb) => {
+    if (cb.checked) checked[cb.dataset.a] = true;
+  });
+  prefs.allergyChecked = checked;
+  prefs.allergyOther = $("#allergyOther").value.trim();
+  savePrefs();
+  $("#allergyDialog").close();
+  const n = allergyList().length;
+  toast(n ? `⚠️ ${n} allerg${n === 1 ? "y" : "ies"} saved — sent with every order` : "Allergies cleared");
+  render();
+}
 
 /* --------------- per-site membership & chefs --------------------
  * A site is visible only to its people: invited contacts, invite-
@@ -1500,6 +1549,7 @@ function camperView() {
     <div class="name-bar">
       <span class="label">🎒 Ordering as:</span>
       <input type="text" id="camperName" value="${esc(prefs.camperName)}" placeholder="Your name">
+      <button class="link-btn" onclick="openAllergyDialog()">⚠️ Allergies${allergyList().length ? ` (${allergyList().length})` : ""}</button>
       ${REMOTE && session
         ? `<span class="account-line">${myId().startsWith("+") ? "📱" : "✉️"} ${esc(myIdLabel())}
              <button class="link-btn" onclick="openAccountDialog()">Account</button>
@@ -1564,6 +1614,7 @@ function camperView() {
           <span>${m.emoji}</span>
           <span class="who">${o.qty}× ${esc(m.name)}</span>
           ${o.toGo ? `<span class="chip togo">🥡 To go</span>` : ""}
+          ${(o.allergies || []).length ? `<span class="chip allergy">⚠️ ${esc(o.allergies.join(", "))}</span>` : ""}
           ${opts ? `<span class="chip">${esc(opts)}</span>` : ""}
           <span class="pref">preferred ${o.preferred}</span>
           ${tail}
@@ -1643,6 +1694,7 @@ function chefView() {
               <span class="who">${esc(o.camper)}</span>
               <span>${o.qty}×</span>
               ${o.toGo ? `<span class="chip togo">🥡 To go</span>` : ""}
+              ${(o.allergies || []).length ? `<span class="chip allergy">⚠️ ${esc(o.allergies.join(", "))}</span>` : ""}
               <span class="status confirmed">Pickup ${o.confirmedSlot}</span>
             </div>`).join("")}
           <div class="row">
@@ -1678,6 +1730,7 @@ function chefView() {
               <span class="who">${esc(o.camper)}</span>
               <span>${o.qty}× ${esc(o.mealName || "")}</span>
               ${o.toGo ? `<span class="chip togo">🥡 To go</span>` : ""}
+              ${(o.allergies || []).length ? `<span class="chip allergy">⚠️ ${esc(o.allergies.join(", "))}</span>` : ""}
               <span class="status ${o.status}">${o.status}</span>
               ${optSummary(o) ? `<span class="chip">${esc(optSummary(o))}</span>` : ""}
               ${o.review ? `<span class="stars">${starStr(o.review.rating)}</span>` : ""}
@@ -1757,6 +1810,7 @@ function chefOrderGroup({ meal, orders }) {
           <span>${o.qty}×</span>
           <span class="pref">prefers ${o.preferred}</span>
           ${o.toGo ? `<span class="chip togo">🥡 To go</span>` : ""}
+          ${(o.allergies || []).length ? `<span class="chip allergy">⚠️ Allergies: ${esc(o.allergies.join(", "))}</span>` : ""}
           ${Object.entries(o.options || {}).map(([g, cs]) =>
             `<span class="chip">${esc(g)}: ${esc(cs.join(", "))}</span>`).join("")}
           ${o.notes ? `<span class="chip">📝 ${esc(o.notes)}</span>` : ""}
@@ -2140,14 +2194,15 @@ function placeOrder(mealId) {
   const camperId = myId();
   const options = collectDialogOptions(mealById(mealId) || {});
   const toGo = !!document.querySelector('#dlgDining button[data-togo="1"].selected');
+  const allergies = allergyList();
   commit((s) => {
     const meal = s.meals.find((m) => m.id === mealId);
     if (!meal) return;
     s.orders.push({
       id: uid("o"), mealId, camper: name, camperId, qty,
-      preferred: slot, notes, options, toGo, status: "pending", confirmedSlot: null, review: null,
+      preferred: slot, notes, options, toGo, allergies, status: "pending", confirmedSlot: null, review: null,
     });
-    notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot})${toGo ? " 🥡 to go" : ""}.${notes ? " Note: " + notes : ""}`);
+    notify("chef", `🎒 ${name} ordered ${qty}× ${meal.name} (prefers ${slot})${toGo ? " 🥡 to go" : ""}.${notes ? " Note: " + notes : ""}${allergies.length ? ` ⚠️ Allergies: ${allergies.join(", ")}` : ""}`);
   }).then((ok) => {
     if (ok) toast(`Order placed for tomorrow! The chef will confirm the pickup time.`);
   });
