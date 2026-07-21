@@ -2237,6 +2237,10 @@ function renderGroupEditor() {
   wrap.innerHTML = pendingGroups.map((g, i) => `
     <div class="card" style="box-shadow:none;padding:10px;margin-bottom:8px;gap:6px">
       <div class="row">
+        <span class="reorder-btns">
+          <button type="button" onclick="moveOptionGroup(${i}, -1)" ${i === 0 ? "disabled" : ""} title="Move up" aria-label="Move option up">▲</button>
+          <button type="button" onclick="moveOptionGroup(${i}, 1)" ${i === pendingGroups.length - 1 ? "disabled" : ""} title="Move down" aria-label="Move option down">▼</button>
+        </span>
         <input type="text" placeholder="Group name, e.g. Bread" value="${esc(g.name)}"
                style="flex:1;min-width:120px" oninput="pendingGroups[${i}].name=this.value">
         <select style="width:auto" onchange="pendingGroups[${i}].type=this.value">
@@ -2257,6 +2261,15 @@ function addOptionGroup() {
 
 function removeOptionGroup(i) {
   pendingGroups.splice(i, 1);
+  renderGroupEditor();
+}
+
+// Reorder the option groups within a meal — reflected in the order
+// dialog's option order. (Chef-only: the meal editor is chef-only.)
+function moveOptionGroup(i, dir) {
+  const j = i + dir;
+  if (j < 0 || j >= pendingGroups.length) return;
+  [pendingGroups[i], pendingGroups[j]] = [pendingGroups[j], pendingGroups[i]];
   renderGroupEditor();
 }
 
