@@ -181,8 +181,25 @@
   .chip.slot { background: #eef4ee; border-color: #cfe0d2; color: var(--pine-dark); }
   .chip.togo { background: var(--pend-bg); border-color: #ecd9ac; color: var(--pend); font-weight: 700; }
   .chip.allergy { background: #fde3e1; border-color: #f2b3ae; color: #b23b34; font-weight: 700; }
+  .chip.allergy-ok { background: #dff3e2; border-color: #a9d9b8; color: #256b3c; font-weight: 700; }
+  .chip.allergy-mod { background: #fdf0d5; border-color: #f0d18a; color: #8a6114; font-weight: 700; }
+  .chip.allergy-warn { background: #fbeae8; border-color: #e9c3bf; color: #a3564f; font-weight: 700; }
   .allergy-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 6px; }
   .allergy-check { display: flex; align-items: center; gap: 7px; font-size: 0.9rem; cursor: pointer; }
+  .ov-key { padding: 1px 6px; border-radius: 6px; font-weight: 700; font-size: 0.8rem; }
+  .ov-key.safe { background: #dff3e2; color: #256b3c; }
+  .ov-key.modify { background: #fdf0d5; color: #8a6114; }
+  .ov-row { padding: 10px 0; border-bottom: 1px solid var(--line); }
+  .ov-row:last-of-type { border-bottom: none; }
+  .ov-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .ov-campers { color: var(--ink-soft); font-size: 0.85rem; }
+  .ov-meals { display: flex; flex-wrap: wrap; gap: 6px; }
+  .ov-cell {
+    border: 1.5px solid var(--line); background: #fff; color: var(--ink-soft);
+    border-radius: 8px; padding: 6px 10px; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+  }
+  .ov-cell.safe { background: #dff3e2; border-color: #a9d9b8; color: #256b3c; }
+  .ov-cell.modify { background: #fdf0d5; border-color: #f0d18a; color: #8a6114; }
   .ordered-count { color: var(--pine); font-weight: 700; }
   .history-list { max-height: 340px; overflow-y: auto; margin: 8px 0; display: flex; flex-direction: column; gap: 2px; }
   .history-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
@@ -523,6 +540,7 @@
 <dialog id="dayNoteDialog"></dialog>
 <dialog id="allergyDialog"></dialog>
 <dialog id="historyDialog"></dialog>
+<dialog id="allergyOverviewDialog"></dialog>
 <dialog id="siteSettingsDialog"></dialog>
 <div class="toast" id="toast"></div>
 
@@ -972,6 +990,107 @@ function fmtHistDate(ts) {
   try {
     return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
   } catch (e) { return ""; }
+}
+
+/* --------- allergy-friendly meals (chef-declared, camper-matched) --
+ * Each meal can carry two chef-set lists of allergens (from the same
+ * COMMON_ALLERGENS vocabulary the camper picks from):
+ *   m.allergySafe   — the meal is already free of these
+ *   m.allergyModify — the meal can be changed to be free of these
+ * Campers see how each meal lines up with their own allergies; every
+ * meal still shows. The chef sets this in the meal editor or by
+ * ticking cells in the aggregate Allergy overview. */
+function mealCoversAllergen(m, allergen) {
+  const a = String(allergen).toLowerCase();
+  if ((m.allergySafe || []).some((x) => x.toLowerCase() === a)) return "safe";
+  if ((m.allergyModify || []).some((x) => x.toLowerCase() === a)) return "modify";
+  return "none";
+}
+// How a meal lines up with the current camper's own allergy list.
+function mealAllergyFit(m) {
+  const mine = allergyList();
+  const safe = [], modify = [], uncovered = [];
+  for (const a of mine) {
+    const st = mealCoversAllergen(m, a);
+    if (st === "safe") safe.push(a);
+    else if (st === "modify") modify.push(a);
+    else uncovered.push(a);
+  }
+  return { mine, safe, modify, uncovered };
+}
+function camperAllergyBadge(m) {
+  const fit = mealAllergyFit(m);
+  if (!fit.mine.length) return "";
+  if (!fit.uncovered.length && !fit.modify.length)
+    return `<span class="chip allergy-ok" title="Free of ${esc(fit.safe.join(", "))}">✅ Fits your allergies</span>`;
+  if (!fit.uncovered.length)
+    return `<span class="chip allergy-mod" title="Can be modified to be free of ${esc(fit.modify.join(", "))} — ask the chef">🔧 Can be made for you</span>`;
+  const good = [...fit.safe, ...fit.modify];
+  if (good.length)
+    return `<span class="chip allergy-warn" title="Safe/modifiable for ${esc(good.join(", "))}; not marked safe for ${esc(fit.uncovered.join(", "))} — ask the chef">⚠️ Ask chef: ${esc(fit.uncovered.join(", "))}</span>`;
+  return `<span class="chip allergy-warn" title="Not marked allergy-safe for ${esc(fit.uncovered.join(", "))}">⚠️ Not marked allergy-safe</span>`;
+}
+
+/* Aggregate allergies reported on the site's current orders, with the
+ * campers who reported each. Backed by order data (which the chef can
+ * read) — camper profiles themselves are private to each camper. */
+function siteAllergens() {
+  const map = new Map(); // lowercased -> { label, campers:Set }
+  for (const o of state.orders) {
+    for (const a of (o.allergies || [])) {
+      const key = String(a).toLowerCase();
+      if (!map.has(key)) map.set(key, { label: a, campers: new Set() });
+      map.get(key).campers.add(o.camper);
+    }
+  }
+  return [...map.values()].sort((x, y) => x.label.localeCompare(y.label));
+}
+let overviewAllergens = [];
+function openAllergyOverviewDialog() {
+  const dlg = $("#allergyOverviewDialog");
+  overviewAllergens = siteAllergens();
+  const meals = state.meals.filter((m) => m.available);
+  dlg.innerHTML = `
+    <h3>⚠️ Allergy overview</h3>
+    <div class="sub">Allergies your campers reported on today's orders. Tap a meal to cycle it
+      <b>—</b> → <span class="ov-key safe">✓ safe</span> → <span class="ov-key modify">🔧 can modify</span>.
+      Campers with matching allergies see this on the menu.</div>
+    ${overviewAllergens.length ? overviewAllergens.map((al, i) => `
+      <div class="ov-row">
+        <div class="ov-head">
+          <span class="chip allergy">⚠️ ${esc(al.label)}</span>
+          <span class="ov-campers">${esc([...al.campers].join(", "))}</span>
+        </div>
+        <div class="ov-meals">
+          ${meals.length ? meals.map((m) => {
+            const st = mealCoversAllergen(m, al.label);
+            return `<button class="ov-cell ${st}" onclick="cycleMealAllergy('${m.id}', ${i})">
+              ${m.emoji} ${esc(m.name)} ${st === "safe" ? "✓" : st === "modify" ? "🔧" : ""}</button>`;
+          }).join("") : `<span class="sub">No meals on the menu yet.</span>`}
+        </div>
+      </div>`).join("")
+      : `<div class="empty">No allergies reported on today's orders yet. You can still set allergy info on each meal in the meal editor.</div>`}
+    <div class="row" style="justify-content:flex-end;margin-top:10px">
+      <button class="btn ghost" onclick="document.getElementById('allergyOverviewDialog').close()">Done</button>
+    </div>`;
+  if (!dlg.open) dlg.showModal();
+}
+// Cycle a meal's status for one allergen: none → safe → modify → none.
+function cycleMealAllergy(mealId, allergenIdx) {
+  const al = overviewAllergens[allergenIdx];
+  if (!al) return;
+  const allergen = al.label;
+  const a = allergen.toLowerCase();
+  commit((s) => {
+    const m = s.meals.find((x) => x.id === mealId);
+    if (!m) return;
+    const prev = mealCoversAllergen(m, allergen); // "none" | "safe" | "modify"
+    const next = prev === "none" ? "safe" : prev === "safe" ? "modify" : "none";
+    m.allergySafe = (m.allergySafe || []).filter((x) => x.toLowerCase() !== a);
+    m.allergyModify = (m.allergyModify || []).filter((x) => x.toLowerCase() !== a);
+    if (next === "safe") m.allergySafe.push(allergen);
+    else if (next === "modify") m.allergyModify.push(allergen);
+  }).then((ok) => { if (ok) openAllergyOverviewDialog(); });
 }
 
 /* --------------- per-site membership & chefs --------------------
@@ -1711,6 +1830,7 @@ function camperView() {
           <div class="meal-desc">${esc(m.desc)}</div>
           <div class="meal-meta">
             <span class="price">${money(m.price)}</span>
+            ${camperAllergyBadge(m)}
             ${ratingChip(m.id)}
             ${(m.optionGroups || []).length ? `<span class="chip">🛠️ customizable</span>` : ""}
             ${m.slots.map((s) => `<span class="chip slot">${s}</span>`).join("")}
@@ -1799,6 +1919,7 @@ function chefView() {
         <button class="btn primary small" onclick="startNewMorning()">🌅 Wrap up breakfast &amp; open tomorrow</button>
         <button class="btn ghost small" onclick="openNoteDialog()">📣 Message campers</button>
         <button class="btn ghost small" onclick="openDayNoteDialog()">📌 ${state.dayNote ? "Edit day note" : "Add day note"}</button>
+        <button class="btn ghost small" onclick="openAllergyOverviewDialog()">⚠️ Allergy overview${siteAllergens().length ? ` (${siteAllergens().length})` : ""}</button>
       </div>
     </div>
 
@@ -2545,6 +2666,20 @@ function openMealDialog(mealId) {
       <div id="mGroups"></div>
       <button type="button" class="btn ghost small" id="mAddGroup" onclick="addOptionGroup()">＋ Add option group</button>
     </div>
+    <div class="field">
+      <label>🥗 Allergy-friendly — this meal is already free of:</label>
+      <div class="allergy-grid" id="mSafeGrid">
+        ${COMMON_ALLERGENS.map((a) => `
+          <label class="allergy-check"><input type="checkbox" data-a="${esc(a)}" ${(m && (m.allergySafe || []).includes(a)) ? "checked" : ""}> ${esc(a)}</label>`).join("")}
+      </div>
+    </div>
+    <div class="field">
+      <label>🔧 Can modify to be free of (ask-the-chef swaps):</label>
+      <div class="allergy-grid" id="mModGrid">
+        ${COMMON_ALLERGENS.map((a) => `
+          <label class="allergy-check"><input type="checkbox" data-a="${esc(a)}" ${(m && (m.allergyModify || []).includes(a)) ? "checked" : ""}> ${esc(a)}</label>`).join("")}
+      </div>
+    </div>
     <div class="row" style="justify-content:flex-end">
       <button class="btn ghost" onclick="document.getElementById('mealDialog').close()">Cancel</button>
       <button class="btn green" onclick="saveMeal(${m ? `'${m.id}'` : "null"})">Save meal</button>
@@ -2589,7 +2724,11 @@ function saveMeal(mealId) {
         choices: (g.choicesText || "").split(",").map((s) => s.trim()).filter(Boolean),
       }))
       .filter((g) => g.name && g.choices.length),
+    allergySafe: [...document.querySelectorAll("#mSafeGrid input:checked")].map((cb) => cb.dataset.a),
+    allergyModify: [...document.querySelectorAll("#mModGrid input:checked")].map((cb) => cb.dataset.a),
   };
+  // "free of" wins over "can modify" — no need to offer to modify what's already safe.
+  data.allergyModify = data.allergyModify.filter((a) => !data.allergySafe.includes(a));
   commit((s) => {
     if (mealId) {
       const m = s.meals.find((x) => x.id === mealId);
